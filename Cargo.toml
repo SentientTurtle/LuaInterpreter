@@ -1,0 +1,8 @@
+[package]
+name = "lua_interpreter"
+version = "0.1.0"
+authors = ["SentientTurtle"]
+edition = "2018"
+publish = false
+
+[dependencies]

@@ -1,0 +1,20 @@
+<component name="ProjectDictionaryState">
+  <dictionary name="Danny">
+    <words>
+      <w>tboolean</w>
+      <w>tfloat</w>
+      <w>tfunction</w>
+      <w>tinteger</w>
+      <w>tlightuserdata</w>
+      <w>tlongstring</w>
+      <w>tnil</w>
+      <w>tnumber</w>
+      <w>tshortstring</w>
+      <w>tstring</w>
+      <w>ttable</w>
+      <w>tthread</w>
+      <w>tuserdata</w>
+      <w>userdata</w>
+    </words>
+  </dictionary>
+</component>
