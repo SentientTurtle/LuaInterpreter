@@ -5,21 +5,23 @@ use std::io::{BufRead, BufReader};
 use core::mem;
 use crate::constants;
 use crate::constants::types::{HOST_OBJECT_SIZE, LUA_INT, LUA_FLOAT, LUA_INSTRUCTION, HOST_INT};
-use crate::types::{LuaString, LuaNumber, LuaValue, Upvalue, LocVar, Prototype};
+use crate::types::{LuaString, LuaNumber, LuaValue, UpvalueDesc, LocVar, Prototype};
 use crate::xdbg;
 
 #[derive(Debug)]
 pub enum DecodeError {
     IO(io::Error),
-    InvalidSig([u8; constants::LUA_SIGNATURE.len()]),
-    ConvDataCorrupt([u8; constants::LUA_CONV_DATA.len()]),
-    IncompatSysParam([u8; constants::LUA_SYSTEM_PARAMETER.len()]),
+    InvalidSignature([u8; constants::LUA_SIGNATURE.len()]),
+    ConversionDataCorrupt([u8; constants::LUA_CONV_DATA.len()]),
+    IncompatibleSystemParam([u8; constants::LUA_SYSTEM_PARAMETER.len()]),
     CorruptCheckInt(LUA_INT),
     CorruptCheckFloat(LUA_FLOAT),
     VectorSizeOverflow(usize, usize),
     UnknownConstantTypeTag(u8),
-    NullStringInConstant,
-    NonBinaryBooleanByte(u8)
+    NullStringInConstant(),
+    NonBinaryBooleanByte(u8),
+    InvalidVersion(u8),
+    InvalidFormat(u8)
 }
 
 impl From<io::Error> for DecodeError {
@@ -119,14 +121,14 @@ fn read_constant<R: BufRead>(reader: &mut R) -> Result<LuaValue, DecodeError> {
         constants::typetag::TBOOLEAN => Ok(LuaValue::BOOLEAN(read_boolean(reader)?)),
         constants::typetag::TNUMBER => Ok(LuaValue::NUMBER(read_floating(reader)?)),
         constants::typetag::TINTEGER => Ok(LuaValue::NUMBER(read_integer(reader)?)),
-        constants::typetag::TSTRING | constants::typetag::TLONGSTRING => Ok(LuaValue::STRING(read_string(reader)?.ok_or(DecodeError::NullStringInConstant)?)),
+        constants::typetag::TSTRING | constants::typetag::TLONGSTRING => Ok(LuaValue::STRING(read_string(reader)?.ok_or(DecodeError::NullStringInConstant())?)),
 
         _ => Err(DecodeError::UnknownConstantTypeTag(constant_type))
     }
 }
 
-fn read_upvalue<R: BufRead>(reader: &mut R) -> Result<Upvalue, DecodeError> {
-    Ok(Upvalue::new(read_byte(reader)?, read_byte(reader)?))
+fn read_upvalue<R: BufRead>(reader: &mut R) -> Result<UpvalueDesc, DecodeError> {
+    Ok(UpvalueDesc::new(read_byte(reader)?, read_byte(reader)?))
 }
 
 fn read_locvar<R: BufRead>(reader: &mut R) -> Result<LocVar, DecodeError> {
@@ -148,7 +150,7 @@ fn read_function<R: BufRead>(reader: &mut R) -> Result<Prototype, DecodeError> {
     let constants = read_vec(reader, constant_count as usize, read_constant)?;
 
     let upvalue_count = read_int(reader)?;
-    let mut upvalues = read_vec(reader, upvalue_count as usize, read_upvalue)?;
+    let upvalues = read_vec(reader, upvalue_count as usize, read_upvalue)?;
 
     let function_count = read_int(reader)?;
     let functions = read_vec(reader, function_count as usize, read_function)?;
@@ -161,11 +163,8 @@ fn read_function<R: BufRead>(reader: &mut R) -> Result<Prototype, DecodeError> {
 
     let debug_upvalue_count = read_int(reader)?;
     debug_assert_eq!(debug_upvalue_count, upvalue_count);
-    let upvalue_names = read_vec(reader, debug_upvalue_count as usize, read_string)?;
-    debug_assert_eq!(upvalues.len(), upvalue_names.len());
-    for (index, name) in upvalue_names.into_iter().enumerate() {
-        upvalues.get_mut(index).unwrap().set_name(name);
-    }
+    let upvaluenames = read_vec(reader, debug_upvalue_count as usize, read_string)?;
+    debug_assert_eq!(upvalues.len(), upvaluenames.len());
 
     Ok(Prototype::from_parts(
         source_string,
@@ -179,7 +178,8 @@ fn read_function<R: BufRead>(reader: &mut R) -> Result<Prototype, DecodeError> {
         upvalues,
         functions,
         lineinfo,
-        locvars
+        locvars,
+        upvaluenames
     ))
 }
 
@@ -187,25 +187,31 @@ fn decode_reader<R: BufRead>(reader: &mut R) -> Result<Prototype, DecodeError> {
     let mut sig_buf = [0u8; constants::LUA_SIGNATURE.len()];
     reader.read_exact(&mut sig_buf)?;
     if &sig_buf != constants::LUA_SIGNATURE {
-        return Err(DecodeError::InvalidSig(sig_buf));
+        return Err(DecodeError::InvalidSignature(sig_buf));
     }
     xdbg!(sig_buf);
 
     let version = read_byte(reader)?;
     let format = read_byte(reader)?;
+    if version != constants::LUA_VERSION {
+        return Err(DecodeError::InvalidVersion(version))
+    }
+    if format != constants::LUA_FORMAT {
+        return Err(DecodeError::InvalidFormat(format))
+    }
 
     let mut convdata_buf = [0u8; constants::LUA_CONV_DATA.len()];
     reader.read_exact(&mut convdata_buf)?;
     xdbg!(convdata_buf);
     if &convdata_buf != constants::LUA_CONV_DATA {
-        return Err(DecodeError::ConvDataCorrupt(convdata_buf));
+        return Err(DecodeError::ConversionDataCorrupt(convdata_buf));
     }
 
     let mut syspar_buf: [u8; 5] = [0u8; constants::LUA_SYSTEM_PARAMETER.len()];
     reader.read_exact(&mut syspar_buf)?;
     xdbg!(syspar_buf);
     if &syspar_buf != &constants::LUA_SYSTEM_PARAMETER {
-        return Err(DecodeError::IncompatSysParam(syspar_buf));
+        return Err(DecodeError::IncompatibleSystemParam(syspar_buf));
     }
 
     let integer = read_integer(reader)?;
@@ -218,7 +224,7 @@ fn decode_reader<R: BufRead>(reader: &mut R) -> Result<Prototype, DecodeError> {
         return Err(DecodeError::CorruptCheckFloat(floating.as_float()));
     }
 
-    let mut upvaluesize_buf = [0u8; 1];
+    let mut upvaluesize_buf = [0u8; 1];     // TODO: Figure out what the fuck this is for
     reader.read_exact(&mut upvaluesize_buf)?;
     xdbg!(upvaluesize_buf);
     let upvaluesize = upvaluesize_buf[0];
