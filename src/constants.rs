@@ -45,6 +45,7 @@ pub const LUA_SYSTEM_PARAMETER: [u8; 5] = [
 ]; // Can't reference LuaNumber enum variants yet for size_of usage
 pub const LUA_CHECK_INTEGER: LuaNumber = LuaNumber::INT(0x5678);
 pub const LUA_CHECK_FLOATING: LuaNumber = LuaNumber::FLOAT(370.5);
+pub const LUA_FIELDS_PER_FLUSH: usize = 50;
 
 pub mod opcodes {
     pub const MOVE: u8 = 0;

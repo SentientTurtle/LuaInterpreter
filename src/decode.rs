@@ -7,6 +7,7 @@ use crate::constants;
 use crate::constants::types::{HOST_OBJECT_SIZE, LUA_INT, LUA_FLOAT, LUA_INSTRUCTION, HOST_INT};
 use crate::types::{LuaString, LuaNumber, LuaValue, UpvalueDesc, LocVar, Prototype};
 use crate::xdbg;
+use std::rc::Rc;
 
 #[derive(Debug)]
 pub enum DecodeError {
@@ -30,7 +31,7 @@ impl From<io::Error> for DecodeError {
     }
 }
 
-pub fn decode_file(path: &Path) -> Result<Prototype, DecodeError> {
+pub fn decode_file(path: &Path) -> Result<Rc<Prototype>, DecodeError> {
     decode_reader(
         &mut BufReader::new(
             File::open(path)?
@@ -135,7 +136,7 @@ fn read_locvar<R: BufRead>(reader: &mut R) -> Result<LocVar, DecodeError> {
     Ok(LocVar::new(read_string(reader)?, read_int(reader)?, read_int(reader)?))
 }
 
-fn read_function<R: BufRead>(reader: &mut R) -> Result<Prototype, DecodeError> {
+fn read_function<R: BufRead>(reader: &mut R) -> Result<Rc<Prototype>, DecodeError> {
     let source_string = read_string(reader)?;
     let first_line_defined = read_int(reader)?;
     let last_line_defined = read_int(reader)?;
@@ -166,7 +167,7 @@ fn read_function<R: BufRead>(reader: &mut R) -> Result<Prototype, DecodeError> {
     let upvaluenames = read_vec(reader, debug_upvalue_count as usize, read_string)?;
     debug_assert_eq!(upvalues.len(), upvaluenames.len());
 
-    Ok(Prototype::from_parts(
+    Ok(Rc::from(Prototype::from_parts(
         source_string,
         first_line_defined,
         last_line_defined,
@@ -180,10 +181,10 @@ fn read_function<R: BufRead>(reader: &mut R) -> Result<Prototype, DecodeError> {
         lineinfo,
         locvars,
         upvaluenames
-    ))
+    )))
 }
 
-fn decode_reader<R: BufRead>(reader: &mut R) -> Result<Prototype, DecodeError> {
+fn decode_reader<R: BufRead>(reader: &mut R) -> Result<Rc<Prototype>, DecodeError> {
     let mut sig_buf = [0u8; constants::LUA_SIGNATURE.len()];
     reader.read_exact(&mut sig_buf)?;
     if &sig_buf != constants::LUA_SIGNATURE {
@@ -224,7 +225,7 @@ fn decode_reader<R: BufRead>(reader: &mut R) -> Result<Prototype, DecodeError> {
         return Err(DecodeError::CorruptCheckFloat(floating.as_float()));
     }
 
-    let mut upvaluesize_buf = [0u8; 1];     // TODO: Figure out what the fuck this is for
+    let mut upvaluesize_buf = [0u8; 1];     // TODO: Figure out what on earth this is for
     reader.read_exact(&mut upvaluesize_buf)?;
     xdbg!(upvaluesize_buf);
     let upvaluesize = upvaluesize_buf[0];
