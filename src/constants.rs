@@ -1,11 +1,14 @@
 use std::mem;
 use types::{HOST_INT, HOST_OBJECT_SIZE, LUA_FLOAT, LUA_INT, LUA_INSTRUCTION};
-use crate::types::LuaNumber;
+use crate::types::value::number::LuaNumber;
 
 /// Raw types
 #[allow(non_camel_case_types)]
 pub mod types {
+    pub type HOST_BYTE = i8;
+    pub type HOST_SHORT = i16;
     pub type HOST_INT = i32;
+    pub type HOST_LONG = i64;
     pub type HOST_OBJECT_SIZE = usize;
     pub type LUA_INT = i64;
     pub type LUA_FLOAT = f64;
