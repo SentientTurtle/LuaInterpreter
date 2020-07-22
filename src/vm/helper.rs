@@ -1,3 +1,4 @@
+// TODO: Maybe merge into fetch module?
 use crate::vm::{ExecutionState, execute_closure, fetch};
 use crate::error::{TracedError, ArgumentError};
 use std::ops::DerefMut;

@@ -420,9 +420,9 @@ pub fn string_match(_execstate: &mut ExecutionState, _params: &[LuaValue]) -> Re
 
 pub fn pack(_execstate: &mut ExecutionState, params: &[LuaValue]) -> Result<Varargs, TracedError> {
     let result: Result<Varargs, ArgumentError> = try {
-        let format_string = params.try_coerce::<LuaString>(0)?;
+        let _format_string = params.try_coerce::<LuaString>(0)?;
         debug_assert!(params.len() > 0);    // We can assume this as the above fails with length 0
-        let arguments = &params[1..];
+        let _arguments = &params[1..];
 
         unimplemented!()
     };

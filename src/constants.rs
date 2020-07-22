@@ -6,9 +6,9 @@ use crate::types::value::number::LuaNumber;
 #[allow(non_camel_case_types)]
 pub mod types {
     pub type HOST_BYTE = i8;
-    pub type HOST_SHORT = i16;
+    pub type _HOST_SHORT = i16;
     pub type HOST_INT = i32;
-    pub type HOST_LONG = i64;
+    pub type _HOST_LONG = i64;
     pub type HOST_OBJECT_SIZE = usize;
     pub type LUA_INT = i64;
     pub type LUA_FLOAT = f64;

@@ -4,7 +4,6 @@
 #![feature(try_blocks)]
 #![feature(clamp)]
 #![feature(const_if_match)]
-#![feature(const_type_id)]
 
 #[macro_use]
 extern crate nom;

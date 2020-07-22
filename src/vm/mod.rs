@@ -299,7 +299,12 @@ fn closure_loop(closure: &mut ClosureImpl, execstate: &mut ExecutionState, param
             let b_rk = (b >> 8 == 1, b & 0b0_1111_1111);
             let c_rk = (c >> 8 == 1, c & 0b0_1111_1111);
 
-            // println!("{} {} A:{} B:{} C:{} BX:{} SBX:{}", pc, crate::constants::opcodes::name(opcode), a, b, c, bx, sbx);    // TODO: remove
+            // TODO: remove
+            #[cfg(test)] {
+                println!("{} {} A:{} B:{} C:{} BX:{} SBX:{}", pc, crate::constants::opcodes::name(opcode), a, b, c, bx, sbx);
+                println!("{:?}", registers)
+            }
+
 
             match opcode {
                 opcodes::MOVE => {
@@ -602,7 +607,7 @@ fn closure_loop(closure: &mut ClosureImpl, execstate: &mut ExecutionState, param
                             Ok(result) => CallResult::Ok(result),
                             Err(err) => CallResult::Err(err)
                         }
-                    }
+                    };
                 }
                 opcodes::CALL => {  // TODO: _CALL METAMETHOD
                     let function = get_reg(registers, a)?.clone();

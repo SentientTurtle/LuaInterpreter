@@ -1,5 +1,4 @@
 use crate::constants::types::{LUA_INT, LUA_FLOAT};
-use std::any::{TypeId};
 use crate::error::ArgumentError;
 use crate::types::value::LuaValue;
 use crate::types::value::number::LuaNumber;
@@ -9,6 +8,7 @@ pub mod parameters;
 pub mod value;
 pub mod upvalue;
 pub mod locvar;
+pub mod operation;
 
 /// Trait for LuaTypes
 pub trait LuaType: 'static {
@@ -16,8 +16,6 @@ pub trait LuaType: 'static {
     /// Not to be confused with the lua "type()" function
     /// Must be unique!
     const CONTAINER_NAME: &'static str;
-    /// Used internally to de-ugly some code; TypeId of the implementing type
-    const TYPE_ID: TypeId = TypeId::of::<Self>();
 
     /// The concrete type name of a value, regardless of it's current Rust type. Usually the name of the LuaValue variant
     /// Equivalent to the lua "type()" function
