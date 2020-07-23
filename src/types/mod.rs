@@ -8,7 +8,6 @@ pub mod parameters;
 pub mod value;
 pub mod upvalue;
 pub mod locvar;
-pub mod operation;
 
 /// Trait for LuaTypes
 pub trait LuaType: 'static {
