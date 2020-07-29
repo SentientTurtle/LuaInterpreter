@@ -64,6 +64,7 @@ impl Prototype {
     }
 }
 
+//noinspection ALL
 impl Display for Prototype {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), fmt::Error> {
         for (index, instruction) in self.code.iter().enumerate() {
@@ -73,7 +74,86 @@ impl Display for Prototype {
             let c = (instruction >> 14) as usize & 0b1_1111_1111;
             let bx = (instruction >> 14) as usize & 0b11_1111_1111_1111_1111;
             let sbx = ((instruction >> 14) as usize & 0b11_1111_1111_1111_1111) as isize - (18isize.pow(2) / 2);
-            write!(f, "{}\t{}\ta:{} b:{} c:{} bx:{} sbx:{}\n", index, constants::opcodes::name(opcode), a, b, c, bx, sbx)?;
+            let b_rk = if b >> 8 == 1 { format!("K({})", self.constants.get(b & 0b0_1111_1111).unwrap_or(&LuaValue::NIL)) } else { format!("R({})", b & 0b0_1111_1111) };
+            let c_rk = if c >> 8 == 1 { format!("K({})", self.constants.get(c & 0b0_1111_1111).unwrap_or(&LuaValue::NIL)) } else { format!("R({})", c & 0b0_1111_1111) };
+
+            use constants::opcodes::*;
+            let instruction_string = match opcode {
+                MOVE => format!("MOVE\tR({}) = R({})", a, b),
+                LOADK => format!("LOADK\tR({}) = K({})", a, self.constants.get(bx).unwrap_or(&LuaValue::NIL)),
+                LOADKX => format!("LOADKX\tR({}) = ExtraArg", a),
+                LOADBOOL => format!("LOADBOOL\tR({}) = {} {}", a, b != 0, if c != 0 { "SKIP" } else { "NO SKIP" }),
+                LOADNIL => format!("LOADNIL\tR({}..={}) = NIL", a + 1, a + b),
+                GETUPVAL => format!("GETUPVAL\tR({}) = Upvalue({})", a, b),
+                GETTABUP => format!("GETTABUP\tR({}) = Upvalue({})[{}]", a, b, c_rk),
+                GETTABLE => format!("GETTABLE\tR({}) = R({})[{}]", a, b, c_rk),
+                SETTABUP => format!("SETTABUP\tUpvalue({})[{}] = {}", a, b_rk, c_rk),
+                SETUPVAL => format!("SETUPVAL\tUpvalue({}) = R({})", b, a),
+                SETTABLE => format!("SETTABLE\tR({})[{}] = {}", a, b_rk, c_rk),
+                NEWTABLE => format!("NEWTABLE\tR({}) = {{}} (#arr={}, #hash={})", a, b, c),
+                SELF => format!("SELF\tR({}) = R({}); R({}) = R({})[{}]", a + 1, b, a, b, c_rk),
+                ADD => format!("ADD\tR({}) = {} + {}", a, b_rk, c_rk),
+                SUB => format!("SUB\tR({}) = {} - {}", a, b_rk, c_rk),
+                MUL => format!("MUL\tR({}) = {} * {}", a, b_rk, c_rk),
+                MOD => format!("MOD\tR({}) = {} % {}", a, b_rk, c_rk),
+                POW => format!("POW\tR({}) = {} ^ {}", a, b_rk, c_rk),
+                DIV => format!("DIV\tR({}) = {} / {}", a, b_rk, c_rk),
+                IDIV => format!("IDIV\tR({}) = {} // {}", a, b_rk, c_rk),
+                BAND => format!("BAND\tR({}) = {} & {}", a, b_rk, c_rk),
+                BOR => format!("BOR\tR({}) = {} | {}", a, b_rk, c_rk),
+                BXOR => format!("XBOR\tR({}) = {} ~ {}", a, b_rk, c_rk),
+                SHL => format!("SHL\tR({}) = {} << {}", a, b_rk, c_rk),
+                SHR => format!("SHR\tR({}) = {} >> {}", a, b_rk, c_rk),
+                UNM => format!("UNM\tR({}) = -R({})", a, b),
+                BNOT => format!("UNM\tR({}) = ~R({})", a, b),
+                NOT => format!("UNM\tR({}) = not R({})", a, b),
+                LEN => format!("UNM\tR({}) = #R({})", a, b),
+                CONCAT => format!("CONCAT\tR({}) = R({}) .. ... .. R({})", a, b, c),
+                JMP => format!("JMP\tjump {:+}", sbx),
+                EQ => format!("EQ\tif {} {} {} then skip", b_rk, if a == 0 { "==" } else { "!=" }, c_rk),
+                LT => format!("LT\tif {} {} {} then skip", b_rk, if a == 0 { "<" } else { ">=" }, c_rk),
+                LE => format!("LE\tif {} {} {} then skip", b_rk, if a == 0 { "<=" } else { ">" }, c_rk),
+                TEST => format!("TEST\tif R({}) as bool != {} then skip", a, if c == 0 { "false" } else { "true" }),
+                TESTSET => format!("TESTSET\tif R({}) as bool != {} then skip else R({})=R({})", b, if c == 0 { "false" } else { "true" }, a, b),
+                CALL => {
+                    let parameters = if b == 0 {
+                        format!("R({}..=top)", a+1)
+                    } else if b == 1 {
+                        format!("")
+                    } else {
+                        format!("R({}..={})", a+1, a+b-1)
+                    };
+                    let result = if c == 0 {
+                        format!("R({}..=TOP) = ", a)
+                    } else if c == 1 {
+                        format!("")
+                    } else {
+                        format!("R({}..={}) = ", a, a + c - 2)
+                    };
+                    format!("CALL\t{}R({})({})", result, a, parameters)
+                },
+                TAILCALL => format!("TAILCALL\treturn R({})({}..={})", a, a+1, a+b-2),
+                RETURN => {
+                    if b == 0 {
+                        format!("RETURN\treturn R({}..=top)", a)
+                    } else if b == 1 {
+                        format!("RETURN\treturn;")
+                    } else {
+                        format!("RETURN\treturn R({}..={})", a, a+b-2)
+                    }
+                },
+                FORLOOP => format!("FORLOOP"),  // TODO
+                FORPREP => format!("FORPREP"),
+                TFORCALL => format!("TFORCALL"),
+                TFORLOOP => format!("TFORLOOP"),
+                SETLIST => format!("SETLIST"),
+                CLOSURE => format!("CLOSURE"),
+                VARARG => format!("VARARG"),
+                EXTRAARG => format!("EXTRAARG"),
+                _ => format!("[UNKNOWN OPCODE]")
+            };
+
+            write!(f, "{}\t{}\n", index, instruction_string)?;
         }
         write!(f, "CONSTANTS: {}\n", self.constants.len())?;
         for (index, constant) in self.constants.iter().enumerate() {
@@ -208,7 +288,7 @@ impl Debug for LuaFunction {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
             LuaFunction::LUA_CLOSURE(c) => f.debug_tuple("LuaFunction::LUA_CLOSURE").field(c).finish(),
-            LuaFunction::RUST_FUNCTION(func) => f.debug_tuple("LuaFunction::RUST_FUNCTION").field(&(func as *const NativeFunction)).finish(),
+            LuaFunction::RUST_FUNCTION(func) => f.debug_tuple("LuaFunction::RUST_FUNCTION").field(&(*func as *const ())).finish(),          // Deref function pointer into raw pointer
             LuaFunction::RUST_CLOSURE(c) => f.debug_tuple("LuaFunction::RUST_CLOSURE").field(&(c as *const NativeClosure)).finish()
         }
     }
@@ -223,9 +303,9 @@ impl Display for LuaFunction {
 impl AsLuaPointer for LuaFunction {
     fn as_lua_pointer(&self) -> usize {
         match self {
-            LuaFunction::LUA_CLOSURE(c) => ref_to_pointer(c.as_ref()),  // Pointer to refcell, as refcell has exclusive ownership of the closure we don't need to enter it here
-            LuaFunction::RUST_FUNCTION(f) => ref_to_pointer(f),
-            LuaFunction::RUST_CLOSURE(c) => ref_to_pointer(c),
+            LuaFunction::LUA_CLOSURE(c) => ref_to_pointer(c.as_ref()),  // Pointer to refcell, as refcell has exclusive ownership of the closure we don't need to enter and get a ref to it's contents it here
+            LuaFunction::RUST_FUNCTION(f) => *f as *const () as usize,      // Deref function pointer into raw pointer
+            LuaFunction::RUST_CLOSURE(c) => ref_to_pointer(c.as_ref()), // Ditto
         }
     }
 }

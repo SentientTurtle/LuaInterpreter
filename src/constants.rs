@@ -11,6 +11,7 @@ pub mod types {
     pub type _HOST_LONG = i64;
     pub type HOST_OBJECT_SIZE = usize;
     pub type LUA_INT = i64;
+    pub type LUA_INT_UNSIGNED = i64;
     pub type LUA_FLOAT = f64;
     pub type LUA_INSTRUCTION = u32;
 }
@@ -45,7 +46,8 @@ pub const LUA_SYSTEM_PARAMETER: [u8; 5] = [
     mem::size_of::<LUA_INSTRUCTION>() as u8,    // Instruction size in bytes
     mem::size_of::<LUA_INT>() as u8,            // Integer size in bytes
     mem::size_of::<LUA_FLOAT>() as u8           // Float size in bytes
-]; // Can't reference LuaNumber enum variants yet for size_of usage
+];
+// Can't reference LuaNumber enum variants yet for size_of usage
 pub const LUA_CHECK_INTEGER: LuaNumber = LuaNumber::INT(0x5678);
 pub const LUA_CHECK_FLOATING: LuaNumber = LuaNumber::FLOAT(370.5);
 pub const LUA_FIELDS_PER_FLUSH: usize = 50;

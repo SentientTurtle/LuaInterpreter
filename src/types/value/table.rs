@@ -3,10 +3,11 @@ use std::collections::HashMap;
 use std::cell::RefCell;
 use crate::types::value::{LuaValue, LuaValueFullEq};
 use crate::error::ArgumentError;
-use std::{mem, fmt};
+use std::fmt;
 use crate::constants::types::LUA_INT;
 use std::fmt::{Display, Formatter};
 use crate::types::{AsLuaPointer, ref_to_pointer, LuaType, CoerceFrom};
+use nom::lib::std::fmt::Debug;
 
 #[derive(Debug)]
 struct TableImpl {
@@ -14,7 +15,7 @@ struct TableImpl {
     array: Vec<LuaValue>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct LuaTable {
     inner: Rc<(RefCell<TableImpl>, RefCell<Option<LuaTable>>)>   // Where inner.0 = TableImpl, and inner.1 = table's metatable
 }
@@ -38,9 +39,13 @@ impl LuaTable {
         }
     }
 
+    /// `table::get` but for Into<LuaValue> keys
+    pub fn raw_get_into<K: Into<LuaValue>>(&self, key: K) -> Result<LuaValue, ArgumentError> {
+        self.raw_get(&key.into())
+    }
+
     // Note to self: _DO NOT ENTER KEY/VALUE REFCELLS IN THIS METHOD_
-    // Note: Does not invoke metamethod, TODO: Implement in vm
-    pub fn get(&self, key: &LuaValue) -> Result<LuaValue, ArgumentError> {
+    pub fn raw_get(&self, key: &LuaValue) -> Result<LuaValue, ArgumentError> {
         if key == &LuaValue::NIL { return Ok(LuaValue::NIL); }
 
         let (inner, _) = &*self.inner;
@@ -66,11 +71,15 @@ impl LuaTable {
         Ok(LuaValue::NIL)
     }
 
+    pub fn raw_set<K: Into<LuaValue>, V: Into<LuaValue>>(&self, key: K, value: V) -> Result<(), ArgumentError> {
+        self.set(key, value)
+    }
+
     // Note to self: _DO NOT ENTER KEY/VALUE REFCELLS IN THIS METHOD_
-    // Note: Does not invoke metamethod, TODO: Implement in vm
     // TODO: Ensure tables are a DAG
-    // TODO: Replace parameters with T: Into<LuaValue> for convenience
-    pub fn set(&self, key: LuaValue, value: LuaValue) -> Result<(), ArgumentError> {
+    pub fn set<K: Into<LuaValue>, V: Into<LuaValue>>(&self, key: K, value: V) -> Result<(), ArgumentError> {
+        let key = key.into();
+        let value = value.into();
         if key == LuaValue::NIL {
             return Err(ArgumentError::TableKeyIsNil);
         }
@@ -88,7 +97,7 @@ impl LuaTable {
                         table.array.truncate(table.array.len() - 1);
                     }
                 } else {
-                    mem::replace(table.array.get_mut(index).unwrap(), value);
+                    *table.array.get_mut(index).unwrap() = value;
                 }
             }
             // Append to array-part
@@ -167,9 +176,17 @@ impl AsLuaPointer for LuaTable {
     }
 }
 
+impl Debug for LuaTable {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "table:{:X}", self.as_lua_pointer()) // TODO: This leaks the memory address, needs to be fixed
+    }
+}
+
 impl Display for LuaTable {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), fmt::Error> {
-        write!(f, "table: {:X}", self.as_lua_pointer()) // TODO: This leaks the memory address, needs to be fixed
+        // let inner = self.inner.0.borrow_mut();
+        // write!(f, "table:{:?},{:?}", inner.map, inner.array)
+        write!(f, "table:{:X}", self.as_lua_pointer()) // TODO: This leaks the memory address, needs to be fixed
     }
 }
 

@@ -135,13 +135,13 @@ pub fn searchpath(_execstate: &mut ExecutionState, params: &[LuaValue]) -> Resul
 pub fn insert_package_lib(execstate: &mut ExecutionState) {
     let table = LuaTable::empty();
 
-    table.set(LuaValue::from("config"), LuaValue::from(CONFIG)).unwrap();
-    table.set(LuaValue::from("cpath"), LuaValue::from(CPATH)).unwrap();
-    table.set(LuaValue::from("loaded"), LuaValue::from(LOADED())).unwrap();
+    table.set("config", CONFIG).unwrap();
+    table.set("cpath", CPATH).unwrap();
+    table.set("loaded", LOADED()).unwrap();
     set_table!(table, loadlib);
-    table.set(LuaValue::from("path"), LuaValue::from(PATH)).unwrap();
-    table.set(LuaValue::from("preload"), LuaValue::from(PRELOAD())).unwrap();
-    table.set(LuaValue::from("searchers"), LuaValue::from(SEARCHERS())).unwrap();
+    table.set("path", PATH).unwrap();
+    table.set("preload", PRELOAD()).unwrap();
+    table.set("searchers", SEARCHERS()).unwrap();
     set_table!(table, searchpath);
 
     execstate.global_env.insert("require", LuaValue::FUNCTION(LuaFunction::RUST_FUNCTION(require)));

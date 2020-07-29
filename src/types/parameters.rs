@@ -21,9 +21,25 @@ pub trait LuaParameters {
                         index,
                     }
                 } else {
-                    unreachable!("try_coerce should never return an error variant other than ArgumentError::CannotCoerce")
+                    unreachable!("coerce_from should never return an error variant other than ArgumentError::CannotCoerce")
                 }
             })
+    }
+
+    fn opt_coerce<T: CoerceFrom<LuaValue>>(&self, index: usize) -> Option<Result<T, ArgumentError>> where T: LuaType {
+        let value = self.get_value(index);
+        value.map(|value| T::coerce_from(value)
+            .map_err(|argerr| {
+                if let ArgumentError::CannotCoerce { expected, found } = argerr {
+                    ArgumentError::InvalidArgument {
+                        expected,
+                        found,
+                        index,
+                    }
+                } else {
+                    unreachable!("coerce_from should never return an error variant other than ArgumentError::CannotCoerce")
+                }
+            }))
     }
 }
 

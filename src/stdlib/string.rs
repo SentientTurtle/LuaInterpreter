@@ -355,7 +355,7 @@ pub fn gsub(execstate: &mut ExecutionState, params: &[LuaValue]) -> Result<Varar
                     |captures: &Captures| {
                         substitution_count += 1;
                         let key = LuaValue::from(captures.get(0).expect("gsub replacement without 0-capture!").as_bytes());
-                        if let Some(s) = table.get(&key).ok().as_ref().map(LuaString::coerce_from).and_then(Result::ok) {
+                        if let Some(s) = table.raw_get(&key).ok().as_ref().map(LuaString::coerce_from).and_then(Result::ok) {   // TODO: Check if metatable __index applies here
                             s
                         } else {
                             LuaString::from("")

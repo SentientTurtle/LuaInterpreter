@@ -8,14 +8,14 @@ use std::convert::TryInto;
 use crate::types::{LuaType, CoerceFrom};
 use crate::types::value::LuaValue;
 
-#[derive(PartialEq, Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug)]
 pub enum LuaNumber {
     INT(LUA_INT),
     FLOAT(LUA_FLOAT),
 }
 
 impl LuaNumber {
-    pub fn  as_int(&self) -> Result<LUA_INT, ArgumentError> {    // TODO: This silently floors when integer-only is probably more expected
+    pub fn as_int(&self) -> Result<LUA_INT, ArgumentError> {    // TODO: This silently floors when integer-only is probably more expected
         match self {
             LuaNumber::INT(int) => Ok(*int),
             LuaNumber::FLOAT(float) => {
@@ -113,24 +113,24 @@ macro_rules! delegate_math_to_primitive {
             }
         }
     };
-($trait:ident, $func:ident, intonly: $float_op:tt) => {
-impl $trait for LuaNumber {
-    type Output = Result<LuaNumber, ArgumentError>;
+    ($trait:ident, $func:ident, intonly: $float_op:tt) => {
+        impl $trait for LuaNumber {
+            type Output = Result<LuaNumber, ArgumentError>;
 
-    fn $func(self, rhs: Self) -> Self::Output {
-        Ok(LuaNumber::INT(self.as_int()? $float_op rhs.as_int()?))
-    }
-}
-};
-($trait:ident, $func:ident, unary: $op:tt) => {
-impl $trait for LuaNumber {
-    type Output = Result<LuaNumber, ArgumentError>;
+            fn $func(self, rhs: Self) -> Self::Output {
+                Ok(LuaNumber::INT(self.as_int()? $float_op rhs.as_int()?))
+            }
+        }
+    };
+    ($trait:ident, $func:ident, unary: $op:tt) => {
+        impl $trait for LuaNumber {
+            type Output = Result<LuaNumber, ArgumentError>;
 
-    fn $func(self) -> Self::Output {
-        Ok(LuaNumber::unary_op(self, |i| {$op i}, |f| {$op f}))
-    }
-}
-};
+            fn $func(self) -> Self::Output {
+                Ok(LuaNumber::unary_op(self, |i| {$op i}, |f| {$op f}))
+            }
+        }
+    };
 }
 
 delegate_math_to_primitive!(Add, add, checked_add, +);
@@ -164,6 +164,31 @@ impl LuaNumber {
     }
 }
 
+impl PartialEq for LuaNumber {
+    fn eq(&self, other: &Self) -> bool {
+        match self {
+            LuaNumber::INT(lhs) => {
+                match other {
+                    LuaNumber::INT(rhs) => lhs.eq(rhs),
+                    LuaNumber::FLOAT(rhs) => {
+                        if (*rhs as LUA_INT) as LUA_FLOAT == *rhs {
+                            lhs.eq(&(*rhs as LUA_INT))
+                        } else {
+                            false
+                        }
+                    },
+                }
+            },
+            LuaNumber::FLOAT(lhs) => {
+                match other {
+                    LuaNumber::INT(rhs) => lhs.eq(&(*rhs as LUA_FLOAT)),
+                    LuaNumber::FLOAT(rhs) => lhs.eq(rhs),
+                }
+            },
+        }
+    }
+}
+
 impl PartialOrd for LuaNumber {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         match self {
@@ -186,6 +211,51 @@ impl PartialOrd for LuaNumber {
                         lhs.partial_cmp(rhs)
                     }
                 }
+            }
+        }
+    }
+}
+
+impl PartialEq<LUA_INT> for LuaNumber {
+    fn eq(&self, other: &i64) -> bool {
+        match self {
+            LuaNumber::INT(i) => i == other,
+            LuaNumber::FLOAT(f) => *f as LUA_INT == *other && *f == ((*f as LUA_INT) as LUA_FLOAT),
+        }
+    }
+}
+
+impl PartialOrd<LUA_INT> for LuaNumber {
+    fn partial_cmp(&self, rhs: &LUA_INT) -> Option<Ordering> {
+        match self {
+            LuaNumber::INT(lhs) => {
+                lhs.partial_cmp(rhs)
+            }
+            LuaNumber::FLOAT(lhs) => {
+                lhs.partial_cmp(&(*rhs as f64))
+            }
+        }
+    }
+}
+
+impl PartialEq<LUA_FLOAT> for LuaNumber {
+    fn eq(&self, other: &f64) -> bool {
+        match self {
+            LuaNumber::INT(i) => *i as LUA_FLOAT == *other && *i == ((*i as LUA_FLOAT) as LUA_INT),
+            LuaNumber::FLOAT(f) => f == other,
+        }
+    }
+}
+
+
+impl PartialOrd<LUA_FLOAT> for LuaNumber {
+    fn partial_cmp(&self, rhs: &LUA_FLOAT) -> Option<Ordering> {
+        match self {
+            LuaNumber::INT(lhs) => {
+                (*lhs as f64).partial_cmp(rhs)
+            }
+            LuaNumber::FLOAT(lhs) => {
+                lhs.partial_cmp(rhs)
             }
         }
     }

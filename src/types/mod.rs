@@ -70,7 +70,7 @@ impl<T: Into<LuaValue> + Clone> CoerceFrom<T> for LUA_INT {
     fn coerce(value: &T) -> Option<Self> {
         match value.clone().into() {
             LuaValue::NUMBER(LuaNumber::INT(int)) => Some(int),
-            LuaValue::NUMBER(LuaNumber::FLOAT(float)) => Some(float as LUA_INT),
+            LuaValue::NUMBER(LuaNumber::FLOAT(float)) => if (float as LUA_INT) as LUA_FLOAT == float { Some(float as LUA_INT) } else { None },
             LuaValue::STRING(s) => s.try_utf8().ok().and_then(|s| s.parse::<LUA_INT>().ok()),
             _ => None
         }
@@ -105,3 +105,4 @@ impl<T: Into<LuaValue> + Clone> CoerceFrom<T> for Nil {
         }
     }
 }
+

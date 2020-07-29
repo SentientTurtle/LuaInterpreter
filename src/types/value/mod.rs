@@ -14,7 +14,6 @@ use std::rc::Rc;
 use std::ops::{Add, Sub, Mul, Div, Rem, BitAnd, BitOr, BitXor, Shl, Shr, Neg};
 use std::cmp::Ordering;
 use crate::types::{AsLuaPointer, LuaType, CoerceFrom};
-use std::any::TypeId;
 
 pub mod number;
 pub mod string;
@@ -22,6 +21,14 @@ pub mod table;
 pub mod userdata;
 pub mod function;
 pub mod thread;
+
+pub struct TypeMetatables {
+    pub(crate) boolean: Option<LuaTable>,
+    pub(crate) number: Option<LuaTable>,
+    pub(crate) string: Option<LuaTable>,
+    pub(crate) function: Option<LuaTable>,
+    pub(crate) thread: Option<LuaTable>,
+}
 
 #[derive(Debug, Clone)]
 pub enum LuaValue {
@@ -138,46 +145,15 @@ impl From<LuaTable> for LuaValue {
     }
 }
 
-/*
-    Old code block, use coercion instead of try_type, TODO: Remove
-    pub fn try_number(&self) -> Result<&LuaNumber, ArgumentError> {
-        match self {
-            LuaValue::NUMBER(number) => Ok(number),
-            _ => Err(ArgumentError::InvalidType { expected: "number", found: self.type_name() })
-        }
-    }
-
-    pub fn try_table(&self) -> Result<&LuaTable, ArgumentError> {
-        match self {
-            LuaValue::TABLE(table) => Ok(table),
-            _ => Err(ArgumentError::InvalidType { expected: "table", found: self.type_name() })
-        }
-    }
-
-    pub fn try_function(&self) -> Result<&LuaFunction, ArgumentError> {
-        match self {
-            LuaValue::FUNCTION(func) => Ok(func),
-            _ => Err(ArgumentError::InvalidType { expected: "function", found: self.type_name() })
-        }
-    }
-
-    pub fn is_truthy(&self) -> bool {
-        match self {
-            LuaValue::NIL => false,
-            LuaValue::BOOLEAN(b) => *b,
-            _ => true
-        }
-    }
- */
-
-unsafe fn transmute<T: 'static, U: 'static>(e: T) -> U { // Regular mem::transmute does a typecheck before filling in the generic parameters
-    debug_assert_eq!(TypeId::of::<T>(), TypeId::of::<U>());                 // TODO: Maybe replace with a regular assert
-    debug_assert_eq!(std::mem::size_of::<T>(), std::mem::size_of::<U>());
-    let copy = std::mem::transmute_copy(&e);    // Does this have to be transmute_copy?
-    // TODO: Ensure no destructor for `e` is ran
-    std::mem::forget(e);
-    copy
-}
+// TODO: Remove
+// unsafe fn transmute<T: 'static, U: 'static>(e: T) -> U { // Regular mem::transmute does a typecheck before filling in the generic parameters
+//     debug_assert_eq!(TypeId::of::<T>(), TypeId::of::<U>());                 // TODO: Maybe replace with a regular assert
+//     debug_assert_eq!(std::mem::size_of::<T>(), std::mem::size_of::<U>());
+//     let copy = std::mem::transmute_copy(&e);    // Does this have to be transmute_copy?
+//     // TODO: Ensure no destructor for `e` is ran
+//     std::mem::forget(e);
+//     copy
+// }
 
 impl<T: Into<LuaValue> + Clone> CoerceFrom<T> for LuaValue {
     fn coerce(value: &T) -> Option<Self> {
@@ -191,7 +167,7 @@ impl LuaValue {
     }
 }
 
-// TODO: Note that these don't invoke metamethods in documentation
+// TODO: Make note that these don't invoke metamethods in documentation
 macro_rules! delegate_math_to_luanumber {
     ($trait:ident, $func:ident, $op:tt) => {
         impl $trait for &LuaValue {
@@ -274,6 +250,90 @@ impl LuaValue {
         }
         Ok(LuaValue::STRING(LuaString::from(buffer.into_boxed_slice())))
     }
+
+    pub fn get_metatable<'a, 'b: 'a>(&'a self, metatables: &'b TypeMetatables) -> Option<LuaTable> {
+        match self {
+            LuaValue::NIL => None,
+            LuaValue::BOOLEAN(_) => metatables.boolean.clone(),
+            LuaValue::NUMBER(_) => metatables.number.clone(),
+            LuaValue::STRING(_) => metatables.string.clone(),
+            LuaValue::USERDATA(userdata) => userdata.metatable(),
+            LuaValue::FUNCTION(_) => metatables.function.clone(),
+            LuaValue::TABLE(table) => table.metatable(),
+            LuaValue::THREAD(_) => metatables.thread.clone(),
+        }
+    }
+
+    /// Handles the `__index` metamethod
+    pub fn index_with_metatable(&self, key: &LuaValue, metatables: &TypeMetatables) -> Result<LuaValue, ArgumentError> {
+        if let LuaValue::TABLE(table) = self {
+            match table.raw_get(key) {
+                Ok(LuaValue::NIL) => (),    // Fallthrough to metatable lookup
+                val @ Ok(_) | val @ Err(_) => return val
+            }
+        }
+
+        if let Some(metatable) = self.get_metatable(metatables) {
+            println!("Table has metatable:{}", metatable);
+            if let Ok(value) = metatable.raw_get_into("__index") {
+                println!("Metatable has __index:{}", value);
+                if value != LuaValue::NIL {
+                    return value.index_with_metatable(key, metatables)   // TODO: Ensure metatable ownership is a DAG
+                }
+            }
+        }
+
+        Ok(LuaValue::NIL)
+    }
+
+    /// Handles the `__newindex` metamethod
+    pub fn write_index_with_metatable(&self, key: LuaValue, value: LuaValue, metatables: &TypeMetatables) -> Result<(), ArgumentError> {
+        if let LuaValue::TABLE(table) = self {
+            match table.raw_get(&key) {
+                Ok(LuaValue::NIL) => (),    // Fallthrough to metatable lookup
+                Ok(_) | Err(_) => {
+                    return table.raw_set(key, value);
+                }
+            }
+        }
+
+        if let Some(metatable) = self.get_metatable(metatables) {
+            if let Ok(metavalue) = metatable.raw_get_into("__newindex") {
+                return match metavalue {   // If __newindex is a function, call it. Else, attempt to index it.
+                    LuaValue::FUNCTION(function) => {
+                        unimplemented!()
+                    }
+                    table @ _ => {
+                        table.write_index_with_metatable(key, value, metatables)
+                    }
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Handles the `__call` metamethod
+    pub fn prep_call_with_metatable(&self, metatables: &TypeMetatables) -> Option<&LuaFunction> {
+        match self {
+            LuaValue::FUNCTION(function) => Some(function),
+            _ => {
+                if let Some(meta) = self.get_metatable(metatables) {
+                    if let Ok(value) = meta.raw_get_into("__call") {
+                        if value != LuaValue::NIL {
+                            unimplemented!()
+                        } else {
+                            None
+                        }
+                    } else {
+                        unreachable!("Raw table gets with &str may not error!")
+                    }
+                } else {
+                    None
+                }
+            }
+        }
+    }
 }
 
 impl PartialEq<bool> for LuaValue {
@@ -339,7 +399,13 @@ impl Hash for LuaValueFullEq {
             LuaValue::NUMBER(n) => {
                 match n {
                     LuaNumber::INT(int) => state.write_i64(*int),
-                    LuaNumber::FLOAT(float) => state.write(&float.to_le_bytes()),
+                    LuaNumber::FLOAT(float) => {
+                        if (*float as LUA_INT) as LUA_FLOAT == *float {
+                            state.write_i64(*float as LUA_INT)
+                        } else {
+                            state.write(&float.to_le_bytes())
+                        }
+                    },
                 }
             }
             LuaValue::STRING(s) => state.write(s.as_bytes()),

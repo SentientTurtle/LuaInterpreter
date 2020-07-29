@@ -51,9 +51,8 @@ pub fn error(_execstate: &mut ExecutionState, params: &[LuaValue]) -> Result<Var
 
 pub fn getmetatable(execstate: &mut ExecutionState, params: &[LuaValue]) -> Result<Varargs, TracedError> {
     if let Some(val) = params.first() {
-        let metatable = vm::fetch::get_metatable(val, &execstate.metatables);
-        if let Some(table) = metatable {
-            if let Ok(guard) = table.get(&LuaValue::from("__metatable")) {
+        if let Some(table) = val.get_metatable(&execstate.metatables) {
+            if let Ok(guard) = table.raw_get_into("__metatable") {
                 Ok(Varargs::from(guard))
             } else {
                 Ok(Varargs::from(table.clone()))
@@ -72,7 +71,7 @@ pub fn ipairs(_execstate: &mut ExecutionState, params: &[LuaValue]) -> Result<Va
         let closure_table = table.clone();
         let mut index: LUA_INT = 1;
         let closure: NativeClosure = Rc::new(RefCell::new(move |_: &mut ExecutionState, _: &[LuaValue]| {
-            let result = closure_table.get(&LuaValue::from(index));
+            let result = closure_table.raw_get_into(index); // TODO: verify this is indeed a raw get
             match &result {
                 Ok(LuaValue::NIL) => {} // End of iteration
                 Ok(_) => index += 1,
@@ -105,8 +104,8 @@ pub fn next(_execstate: &mut ExecutionState, params: &[LuaValue]) -> Result<Vara
 
 pub fn pairs(execstate: &mut ExecutionState, params: &[LuaValue]) -> Result<Varargs, TracedError> {
     if let Some(val) = params.first() {
-        if let Some(metatable) = vm::fetch::get_metatable(val, &execstate.metatables) {
-            if let Ok(function_value) = metatable.get(&LuaValue::from("__pairs")) {
+        if let Some(metatable) = val.get_metatable(&execstate.metatables) {
+            if let Ok(function_value) = metatable.raw_get_into("__pairs") {
                 let result = vm::helper::do_call_from_rust(pairs, function_value, execstate, &[val.clone()])?;
                 return Ok(result.select_range(0..=3));
             }
@@ -150,6 +149,22 @@ pub fn print(_execstate: &mut ExecutionState, params: &[LuaValue]) -> Result<Var
     Ok(Varargs::empty())
 }
 
+// TODO: Remove
+pub fn debugprint(_execstate: &mut ExecutionState, params: &[LuaValue]) -> Result<Varargs, TracedError> {
+    match params.len() {
+        0 => println!("{:?}", "\n"),
+        _ => {
+            let (first, others) = params.split_first().unwrap();
+            print!("{:?}", first);
+            for val in others {
+                print!("\t{:?}", val)
+            }
+            println!();
+        }
+    }
+    Ok(Varargs::empty())
+}
+
 pub fn rawequal(_execstate: &mut ExecutionState, params: &[LuaValue]) -> Result<Varargs, TracedError> {
     let result: Result<Varargs, ArgumentError> = try {
         let lhs = params.try_coerce::<LuaValue>(0)?;
@@ -159,11 +174,12 @@ pub fn rawequal(_execstate: &mut ExecutionState, params: &[LuaValue]) -> Result<
     result.trace(rawequal)
 }
 
+// Todo check this can't be protected by with metatables somehow
 pub fn rawget(_execstate: &mut ExecutionState, params: &[LuaValue]) -> Result<Varargs, TracedError> {
     let result: Result<Varargs, ArgumentError> = try {
         let table = params.try_coerce::<LuaTable>(0)?;
         let index = params.try_coerce::<LuaValue>(1)?;
-        Varargs::from(table.get(&index)?)
+        Varargs::from(table.raw_get(&index)?)
     };
     result.trace(rawget)
 }
@@ -182,8 +198,8 @@ pub fn rawset(_execstate: &mut ExecutionState, params: &[LuaValue]) -> Result<Va
         let index = params.try_coerce::<LuaValue>(1)?;
         let value = params.try_coerce::<LuaValue>(2)?;
 
-        table.set(index.clone(), value.clone())?;
-        Varargs::from(table.clone())
+        table.set(index, value)?;
+        Varargs::from(table)
     };
     result.trace(rawset)
 }
@@ -204,8 +220,9 @@ pub fn setmetatable(_execstate: &mut ExecutionState, params: &[LuaValue]) -> Res
     let result: Result<Varargs, LuaError> = try {
         let table = params.try_coerce::<LuaTable>(0)?;
         let new_metatable = params.try_coerce::<LuaTable>(1)?;
+        println!("Setting {:?}'s metatable to {}", table, new_metatable);
         if let Some(current_metatable) = table.metatable() {
-            if let Ok(_) = current_metatable.get(&LuaValue::from("__metatable")) {
+            if let Ok(_) = current_metatable.raw_get_into("__metatable") {
                 Err(LuaError::user_str("cannot change protected metatable"))?;
             }
         }
@@ -242,8 +259,8 @@ pub fn tonumber(_execstate: &mut ExecutionState, params: &[LuaValue]) -> Result<
 
 pub fn tostring(execstate: &mut ExecutionState, params: &[LuaValue]) -> Result<Varargs, TracedError> {
     if let Some(val) = params.first() {
-        if let Some(metatable) = vm::fetch::get_metatable(val, &execstate.metatables) {
-            if let Ok(function_value) = metatable.get(&LuaValue::from("__tostring")) {
+        if let Some(metatable) = val.get_metatable(&execstate.metatables) {
+            if let Ok(function_value) = metatable.raw_get_into("__tostring") {
                 return vm::helper::do_call_from_rust(pairs, function_value, execstate, &[val.clone()]);
             }
         }
@@ -300,6 +317,7 @@ pub fn insert_basic_lib(execstate: &mut ExecutionState) {
     set_global!(execstate, pairs);
     set_global!(execstate, pcall);
     set_global!(execstate, print);
+    set_global!(execstate, debugprint);
     set_global!(execstate, rawequal);
     set_global!(execstate, rawget);
     set_global!(execstate, rawlen);

@@ -8,6 +8,10 @@ impl Varargs {
         Varargs { inner: vec![LuaValue::NIL] }
     }
 
+    pub fn fail() -> Varargs {
+        Varargs::nil()
+    }
+
     pub fn empty() -> Varargs {
         Varargs { inner: vec![] }
     }

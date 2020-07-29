@@ -6,7 +6,7 @@ macro_rules! set_table {
     };
 
     ($table:ident, $name:expr, $func:ident) => {
-        $table.set(LuaValue::from($name), LuaValue::FUNCTION(LuaFunction::RUST_FUNCTION($func))).unwrap();
+        $table.raw_set($name, LuaFunction::RUST_FUNCTION($func)).unwrap();
     };
 }
 
@@ -28,6 +28,8 @@ pub mod math;
 pub mod io;
 #[allow(dead_code)]
 pub mod os;
+#[allow(dead_code)]
+pub mod debug;
 
 #[allow(dead_code)]
 pub fn insert_all_lib(execstate: &mut ExecutionState) {
@@ -40,4 +42,5 @@ pub fn insert_all_lib(execstate: &mut ExecutionState) {
     math::insert_math_lib(execstate);
     io::insert_io_lib(execstate);
     os::insert_os_lib(execstate);
+    debug::insert_debug_lib(execstate);
 }

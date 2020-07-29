@@ -2,15 +2,14 @@
 use crate::vm::*;
 use crate::constants::types::LUA_INSTRUCTION;
 use std::mem;
-use crate::error::ByteCodeError;
+use crate::error::{ByteCodeError};
 use crate::types::upvalue::UpvalueImpl;
-use crate::types::value::function::{ClosureImpl, Prototype, LuaFunction};
+use crate::types::value::function::{ClosureImpl, Prototype};
 use crate::types::value::LuaValue;
-use crate::types::value::table::LuaTable;
 
 pub(super) fn next_op(proto: &Prototype, pc: &mut usize) -> Result<LUA_INSTRUCTION, ByteCodeError> {
     let op = proto.code.get(*pc).ok_or(ByteCodeError::ProgramCounterOutOfBounds { counter: *pc, code_length: proto.code.len() })?;
-    mem::replace(pc, *pc + 1);
+    *pc = *pc + 1;
     Ok(*op)
 }
 
@@ -22,6 +21,11 @@ pub(super) fn get_reg(registers: &Vec<LuaValue>, index: usize) -> Result<&LuaVal
 pub(super) fn get_reg_mut(registers: &mut Vec<LuaValue>, index: usize) -> Result<&mut LuaValue, ByteCodeError> {
     let registers_length = registers.len();
     registers.get_mut(index).ok_or(ByteCodeError::RegisterIndexOutOfBounds { index, registers_length})
+}
+
+// TODO: Maybe forcibly inline
+pub(super) fn set_reg(registers: &mut Vec<LuaValue>, index: usize, value: LuaValue) -> Result<(), ByteCodeError> {
+    Ok(*get_reg_mut(registers, index)? = value)
 }
 
 pub(super) fn get_const(proto: &Prototype, index: usize) -> Result<&LuaValue, ByteCodeError> {
@@ -87,30 +91,4 @@ pub(super) fn set_upvalue<'a: 'c, 'b, 'c>(closure: &'a mut ClosureImpl, index: u
     } else {
         Err(ByteCodeError::UpvalueIndexOutOfBounds { upvalue_index: index, upvalues_length: closure.upvalues.len() })
     }
-}
-
-pub fn get_metatable<'a, 'b: 'a>(value: &'a LuaValue, metatables: &'b TypeMetatables) -> Option<LuaTable> {
-    match value {
-        LuaValue::NIL => None,
-        LuaValue::BOOLEAN(_) => metatables.boolean.clone(),
-        LuaValue::NUMBER(_) => metatables.number.clone(),
-        LuaValue::STRING(_) => metatables.string.clone(),
-        LuaValue::USERDATA(usedata) => usedata.metatable(),
-        LuaValue::FUNCTION(_) => metatables.function.clone(),
-        LuaValue::TABLE(table) => table.metatable(),
-        LuaValue::THREAD(_) => metatables.thread.clone(),
-    }
-}
-
-pub fn get_function_from_value_call(value: LuaValue, metatables: &TypeMetatables) -> Option<LuaFunction> {
-    if let LuaValue::FUNCTION(function) = value {
-        return Some(function);
-    } else {
-        if let Some(metatable) = get_metatable(&value, metatables) {
-            if let Ok(value) = metatable.get(&LuaValue::from("__call")) {
-                return get_function_from_value_call(value, metatables)    // TODO: assumes there are no recursive links, gotta fix that
-            }
-        }
-    }
-    None
 }

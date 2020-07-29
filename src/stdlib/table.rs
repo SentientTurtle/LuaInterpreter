@@ -23,7 +23,7 @@ pub fn concat(_execstate: &mut ExecutionState, params: &[LuaValue]) -> Result<Va
         loop {
             if let Some(end) = end { if index > end { break; } }
             let key = LuaValue::from(index);
-            match table.get(&key) {
+            match table.raw_get(&key) { // TODO: Check for __index
                 Err(..) | Ok(LuaValue::NIL) => {
                     break;
                 }
@@ -54,7 +54,7 @@ pub fn unpack(_execstate: &mut ExecutionState, params: &[LuaValue]) -> Result<Va
         loop {
             if let Some(end) = end { if index > end { break; } }
             let key = LuaValue::from(index);
-            match table.get(&key) {
+            match table.raw_get(&key) {
                 Err(..) | Ok(LuaValue::NIL) => {
                     break;
                 }
