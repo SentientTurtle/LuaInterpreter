@@ -2,6 +2,7 @@
 #![feature(stmt_expr_attributes)]
 #![feature(try_blocks)]
 #![feature(clamp)]
+#![feature(const_panic)]
 
 #[macro_use]
 extern crate nom;
@@ -10,6 +11,7 @@ extern crate nom;
 mod types;
 #[allow(unused_variables, dead_code)]
 mod bytecode;
+mod compiler;
 mod vm;
 mod constants;
 mod util;

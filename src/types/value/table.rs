@@ -142,7 +142,7 @@ impl LuaTable {
         tab.array.len() + tab.map.len()
     }
 
-    pub fn next(&self, index: &LuaValue) -> Option<(LuaValue, LuaValue)> {  // TODO: replace with something less stupidly slow
+    pub fn next(&self, index: &LuaValue) -> Option<(LuaValue, LuaValue)> {  // TODO: replace with something less horrendously slow
         let table = &self.inner.0.borrow();
         let mut iter = table.map.iter()
             .map(|k| (k.0.inner.clone(), k.1))

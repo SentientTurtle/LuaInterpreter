@@ -1,5 +1,5 @@
 use crate::error::ArgumentError;
-use crate::constants::types::{LUA_INT, LUA_FLOAT};
+use crate::constants::types::{LUA_INT, LUA_INT_UNSIGNED, LUA_FLOAT};
 use std::ops::{Add, Sub, Mul, Div, Rem, BitAnd, BitOr, BitXor, Shl, Shr, Neg};
 use std::cmp::Ordering;
 use std::fmt::{Display, Formatter};
@@ -35,11 +35,10 @@ impl LuaNumber {
         }
     }
 
-    pub fn binary_op(lhs: LuaNumber, rhs: LuaNumber, intfunc: fn(LUA_INT, LUA_INT) -> Option<LUA_INT>, floatfunc: fn(LUA_FLOAT, LUA_FLOAT) -> LUA_FLOAT) -> LuaNumber {
+    pub fn binary_op(lhs: LuaNumber, rhs: LuaNumber, intfunc: fn(LUA_INT, LUA_INT) -> LUA_INT, floatfunc: fn(LUA_FLOAT, LUA_FLOAT) -> LUA_FLOAT) -> LuaNumber {
         match (lhs, rhs) {
             (LuaNumber::INT(l_i), LuaNumber::INT(r_i)) => {
-                intfunc(l_i, r_i).map(LuaNumber::from)
-                    .unwrap_or_else(|| { LuaNumber::from(floatfunc(lhs.as_float(), rhs.as_float())) })
+                LuaNumber::from(intfunc(l_i, r_i))
             }
             _ => {
                 LuaNumber::from(floatfunc(lhs.as_float(), rhs.as_float()))
@@ -71,11 +70,34 @@ impl<T: Into<LuaValue> + Clone> CoerceFrom<T> for LuaNumber {
         match value.clone().into() {
             LuaValue::NUMBER(number) => Some(number.clone()),
             LuaValue::STRING(string) => {
-                string.try_utf8().ok().and_then(|string| {
-                    string.parse::<LUA_INT>().map(LuaNumber::from).or_else(
-                        |_| string.parse::<LUA_FLOAT>().map(LuaNumber::from)
-                    ).ok()
-                })
+                if let Some(utf8) = string.try_utf8().ok() {
+                    let utf8 = utf8.trim();
+                    if let Ok(int) = utf8.parse::<LUA_INT>() {
+                        Some(LuaNumber::from(int))
+                    } else if let Ok(float) = utf8.parse::<LUA_FLOAT>() {
+                        Some(LuaNumber::from(float))
+                    } else {
+                        let mut negate = false;
+                        let utf8 = if let Some(utf8) = utf8.strip_prefix("-") {
+                            negate = true;
+                            utf8
+                        } else {
+                            utf8
+                        };
+                        let utf8 = utf8.strip_prefix("0x").unwrap_or(utf8);
+                        if let Ok(unsigned) = LUA_INT_UNSIGNED::from_str_radix(utf8, 16) {
+                            if negate {
+                                Some(LuaNumber::from(-(unsigned as i64)))
+                            } else {
+                                Some(LuaNumber::from(unsigned as i64))
+                            }
+                        } else {
+                            None
+                        }
+                    }
+                } else {
+                    None
+                }
             }
             _ => None
         }
@@ -113,12 +135,30 @@ macro_rules! delegate_math_to_primitive {
             }
         }
     };
-    ($trait:ident, $func:ident, intonly: $float_op:tt) => {
+    ($trait:ident, $func:ident, floatonly: $float_op:tt) => {
         impl $trait for LuaNumber {
             type Output = Result<LuaNumber, ArgumentError>;
 
             fn $func(self, rhs: Self) -> Self::Output {
-                Ok(LuaNumber::INT(self.as_int()? $float_op rhs.as_int()?))
+                Ok(LuaNumber::FLOAT(self.as_float() $float_op rhs.as_float()))
+            }
+        }
+    };
+    ($trait:ident, $func:ident, intonly: $int_op:tt) => {
+        impl $trait for LuaNumber {
+            type Output = Result<LuaNumber, ArgumentError>;
+
+            fn $func(self, rhs: Self) -> Self::Output {
+                Ok(LuaNumber::INT(self.as_int()? $int_op rhs.as_int()?))
+            }
+        }
+    };
+    ($trait:ident, $func:ident, uintonly: $int_op:tt) => {
+        impl $trait for LuaNumber {
+            type Output = Result<LuaNumber, ArgumentError>;
+
+            fn $func(self, rhs: Self) -> Self::Output {
+                Ok(LuaNumber::INT(((self.as_int()? as LUA_INT_UNSIGNED) $int_op (rhs.as_int()? as LUA_INT_UNSIGNED)) as LUA_INT))
             }
         }
     };
@@ -133,26 +173,45 @@ macro_rules! delegate_math_to_primitive {
     };
 }
 
-delegate_math_to_primitive!(Add, add, checked_add, +);
-delegate_math_to_primitive!(Sub, sub, checked_sub, -);
-delegate_math_to_primitive!(Mul, mul, checked_mul, *);
-delegate_math_to_primitive!(Div, div, checked_div, /);
-delegate_math_to_primitive!(Rem, rem, checked_rem, %);
+delegate_math_to_primitive!(Add, add, wrapping_add, +);
+delegate_math_to_primitive!(Sub, sub, wrapping_sub, -);
+delegate_math_to_primitive!(Mul, mul, wrapping_mul, *);
+delegate_math_to_primitive!(Div, div, floatonly: /); // TODO: Fix div-by-zero
+delegate_math_to_primitive!(Rem, rem, wrapping_rem, %);
 delegate_math_to_primitive!(BitAnd, bitand, intonly: &);
 delegate_math_to_primitive!(BitOr, bitor, intonly: |);
 delegate_math_to_primitive!(BitXor, bitxor, intonly: ^);
-delegate_math_to_primitive!(Shl, shl, intonly: <<);
-delegate_math_to_primitive!(Shr, shr, intonly: >>);
+// delegate_math_to_primitive!(Shl, shl, uintonly: <<);
+impl Shl for LuaNumber {
+    type Output = Result<LuaNumber, ArgumentError>;
+
+    fn shl(self, rhs: Self) -> Self::Output {
+        if rhs < 0 {
+            self.shr((-rhs)?)
+        } else {
+            let (value, did_overflow) = (self.as_int()? as LUA_INT_UNSIGNED).overflowing_shl(rhs.as_int()? as u32);
+            Ok(LuaNumber::INT(if did_overflow { 0 } else { value } as LUA_INT))
+        }
+    }
+}
+// delegate_math_to_primitive!(Shr, shr, uintonly: >>);
+impl Shr for LuaNumber {
+    type Output = Result<LuaNumber, ArgumentError>;
+
+    fn shr(self, rhs: Self) -> Self::Output {
+        if rhs < 0 {
+            self.shl((-rhs)?)
+        } else {
+            let (value, did_overflow) = (self.as_int()? as LUA_INT_UNSIGNED).overflowing_shr(rhs.as_int()? as u32);
+            Ok(LuaNumber::INT(if did_overflow { 0 } else { value } as LUA_INT))
+        }
+    }
+}
 delegate_math_to_primitive!(Neg, neg, unary: -);
 
 impl LuaNumber {
     pub fn pow(self, rhs: Self) -> Result<LuaNumber, ArgumentError> {
-        Ok(LuaNumber::binary_op(
-            self, rhs,
-            |lhs, rhs| {
-                rhs.try_into().ok().and_then(|rhs| { lhs.checked_pow(rhs) })
-            },
-            |lhs, rhs| { lhs.powf(rhs) }))
+        Ok(LuaNumber::from(self.as_float().powf(rhs.as_float())))
     }
 
     pub fn idiv(self, rhs: Self) -> Result<LuaNumber, ArgumentError> {

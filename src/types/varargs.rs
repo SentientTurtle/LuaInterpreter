@@ -1,6 +1,7 @@
 use crate::types::value::LuaValue;
 use std::ops::{Bound, RangeBounds};
 
+#[derive(Debug)]
 pub struct Varargs { inner: Vec<LuaValue> } // TODO: See if this can be replaced with a boxed slice, but it doesn't really matter.
 
 impl Varargs {

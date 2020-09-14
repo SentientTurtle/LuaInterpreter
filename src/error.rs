@@ -1,12 +1,13 @@
-use crate::constants::types::{LUA_INT, LUA_INSTRUCTION};
+use crate::constants::types::{LUA_INT, LUA_INSTRUCTION, LUA_FLOAT};
 use std::rc::Rc;
 use std::fmt::{Formatter, Debug, Display};
-use std::fmt;
+use std::{fmt, io};
 use crate::types::value::string::LuaString;
 use crate::types::value::LuaValue;
 use crate::types::value::function::{Prototype, NativeFunction};
 use crate::types::varargs::Varargs;
-
+use std::io::Error;
+use crate::constants;
 
 pub enum TraceEntry {
     LUA(usize, Rc<Prototype>),
@@ -65,8 +66,10 @@ impl TracedError {
         match self.cause {
             LuaError::ArgumentError(err) => LuaValue::from(LuaString::UNICODE(Rc::from(format!("{}", err)))),
             LuaError::ByteCodeError(err) => LuaValue::from(LuaString::UNICODE(Rc::from(format!("{}", err)))),
+            LuaError::CompileError(err) => LuaValue::from(LuaString::UNICODE(Rc::from(format!("{}", err)))),
+            LuaError::DecodeError(err) => LuaValue::from(LuaString::UNICODE(Rc::from(format!("{}", err)))),
             LuaError::UserError { message, level: _ } => message.unwrap_or(LuaValue::NIL),
-            LuaError::InterpreterBug { message } => LuaValue::from(message)
+            LuaError::InterpreterBug { message } => LuaValue::from(message),
         }
     }
 }
@@ -85,6 +88,8 @@ impl<T: Into<LuaError>> Traceable for Result<Varargs, T> {
 pub enum LuaError {
     ArgumentError(ArgumentError),
     ByteCodeError(ByteCodeError),
+    CompileError(CompileError),
+    DecodeError(DecodeError),
     UserError { message: Option<LuaValue>, level: LUA_INT },
     InterpreterBug { message: &'static str }
 }
@@ -111,9 +116,21 @@ impl From<ByteCodeError> for LuaError {
     fn from(e: ByteCodeError) -> Self { LuaError::ByteCodeError(e) }
 }
 
+impl From<CompileError> for LuaError {
+    fn from(e: CompileError) -> Self {
+        LuaError::CompileError(e)
+    }
+}
+
+impl From<DecodeError> for LuaError {
+    fn from(e: DecodeError) -> Self {
+        LuaError::DecodeError(e)
+    }
+}
+
 #[derive(Debug)]
 pub enum ArgumentError {
-    InvalidArgument { expected: &'static str, found: &'static str, index: usize },
+    InvalidArgument { expected: String, found: &'static str, index: usize },    // TODO: Replace `expected` with a &str once concatenation of str literals and str constants is possible.
     CannotCoerce { expected: &'static str, found: &'static str },
     InvalidType { expected: &'static str, found: &'static str },
     TableKeyIsNaN,
@@ -172,5 +189,58 @@ impl Display for ByteCodeError {
             ByteCodeError::AttemptToExecuteExtraArg => write!(f, "Attempt to execute ExtraArg opcode"),
             ByteCodeError::ExpectedExtraArg { found } => write!(f, "Expected ExtraArg, found opcode {:X}", found),
         }
+    }
+}
+
+#[derive(Debug)]
+pub enum DecodeError {
+    IO(io::Error),
+    InvalidSignature { found: [u8; constants::LUA_SIGNATURE.len()], expected: &'static [u8; constants::LUA_SIGNATURE.len()] },
+    ConversionDataCorrupt { found: [u8; constants::LUA_CONV_DATA.len()], expected: &'static [u8; constants::LUA_CONV_DATA.len()] },
+    IncompatibleSystemParam([u8; constants::LUA_SYSTEM_PARAMETER.len()]),
+    CorruptCheckInt(LUA_INT),
+    CorruptCheckFloat(LUA_FLOAT),
+    VectorSizeOverflow(usize, usize),
+    UnknownConstantTypeTag(u8),
+    NullStringInConstant(),
+    NonBinaryBooleanByte(u8),
+    InvalidVersion(u8),
+    InvalidFormat(u8),
+}
+
+impl From<io::Error> for DecodeError {
+    fn from(err: io::Error) -> Self {
+        DecodeError::IO(err)
+    }
+}
+
+impl Display for DecodeError {
+    fn fmt(&self, _f: &mut Formatter<'_>) -> fmt::Result {
+        unimplemented!()
+    }
+}
+
+#[derive(Debug)]
+pub enum CompileError {
+    ExternalCommandFailed(io::Error),
+    CompileFailed(String),
+    DecodeError(DecodeError)
+}
+
+impl Display for CompileError {
+    fn fmt(&self, _f: &mut Formatter<'_>) -> fmt::Result {
+        unimplemented!()
+    }
+}
+
+impl From<io::Error> for CompileError {
+    fn from(err: Error) -> Self {
+        CompileError::ExternalCommandFailed(err)
+    }
+}
+
+impl From<DecodeError> for CompileError {
+    fn from(err: DecodeError) -> Self {
+        CompileError::DecodeError(err)
     }
 }

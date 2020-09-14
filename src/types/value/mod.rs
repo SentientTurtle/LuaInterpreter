@@ -264,6 +264,7 @@ impl LuaValue {
         }
     }
 
+    // TODO: rename these to `index`/`setindex`/`call`?
     /// Handles the `__index` metamethod
     pub fn index_with_metatable(&self, key: &LuaValue, metatables: &TypeMetatables) -> Result<LuaValue, ArgumentError> {
         if let LuaValue::TABLE(table) = self {
@@ -274,9 +275,7 @@ impl LuaValue {
         }
 
         if let Some(metatable) = self.get_metatable(metatables) {
-            println!("Table has metatable:{}", metatable);
             if let Ok(value) = metatable.raw_get_into("__index") {
-                println!("Metatable has __index:{}", value);
                 if value != LuaValue::NIL {
                     return value.index_with_metatable(key, metatables)   // TODO: Ensure metatable ownership is a DAG
                 }
@@ -314,14 +313,14 @@ impl LuaValue {
     }
 
     /// Handles the `__call` metamethod
-    pub fn prep_call_with_metatable(&self, metatables: &TypeMetatables) -> Option<&LuaFunction> {
+    pub fn prep_call_with_metatable(self, metatables: &TypeMetatables) -> Option<LuaFunction> {
         match self {
             LuaValue::FUNCTION(function) => Some(function),
             _ => {
                 if let Some(meta) = self.get_metatable(metatables) {
                     if let Ok(value) = meta.raw_get_into("__call") {
                         if value != LuaValue::NIL {
-                            unimplemented!()
+                            value.prep_call_with_metatable(metatables)
                         } else {
                             None
                         }
@@ -332,6 +331,20 @@ impl LuaValue {
                     None
                 }
             }
+        }
+    }
+
+    pub(crate) fn non_nil(&self) -> Option<&Self> {
+        match self {
+            LuaValue::NIL => None,
+            _ => Some(self)
+        }
+    }
+
+    pub(crate) fn not_nil(self) -> Option<Self> {
+        match self {
+            LuaValue::NIL => None,
+            _ => Some(self)
         }
     }
 }

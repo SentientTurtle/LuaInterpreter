@@ -24,11 +24,21 @@ impl<T: Clone> From<T> for CloneCell<T> {
     }
 }
 
-// /// 2-type union with no greater meaning to each variant
-// pub enum Union2<T, U> {
-//     One(T),
-//     Two(U)
-// }
+/// 2-type union with no greater meaning to each variant
+pub enum Union2<T, U> {
+    One(T),
+    Two(U)
+}
+
+impl<T, U> Union2<T, U> {
+    pub fn first(val: T) -> Union2<T, U> {
+        Union2::One(val)
+    }
+
+    pub fn second(val: U) -> Union2<T, U> {
+        Union2::Two(val)
+    }
+}
 
 /// 3-type union with no greater meaning to each variant
 pub enum Union3<T, U, V> {

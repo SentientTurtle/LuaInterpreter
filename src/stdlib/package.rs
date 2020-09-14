@@ -8,23 +8,60 @@ use crate::types::parameters::LuaParameters;
 use crate::types::value::string::LuaString;
 use std::ffi::OsString;
 use std::fs::File;
+use crate::types::CoerceFrom;
+use crate::vm;
 
 pub fn require(execstate: &mut ExecutionState, params: &[LuaValue]) -> Result<Varargs, TracedError> {
     let result: Result<Varargs, LuaError> = try {
-        let module = params.try_coerce::<LuaString>(0)?;
+        let module_name = params.try_coerce::<LuaString>(0)?;
         // If a builtin library, try loading those from the execstate environment
-        if let Some(name) = module.try_utf8().ok() {
+        if let Some(name) = module_name.try_utf8().ok() {
             match name {
                 "coroutine" | "package" | "string" | "utf8" | "table" | "math" | "io" | "os" | "debug" => {
-                    if let Some(value) = execstate.global_env.get(name) {
+                    if let Some(value) = execstate.modules.get(name) {
                         return Ok(Varargs::from(value.clone()));
                     }
                 }
                 _ => {}
             }
         }
-        // TODO: Implement
-        Err(LuaError::user_string(format!("Unknown module: {}", module)))?
+
+        if let Some(package_module) = execstate.modules.get("package") {
+            let loaded_table = package_module.raw_get_into("loaded")
+                .unwrap_or(LuaValue::NIL);
+
+            let module = loaded_table.index_with_metatable(&LuaValue::from(module_name.clone()), &execstate.metatables)?;
+            if module != LuaValue::NIL {
+                return Ok(Varargs::from(module));
+            }
+
+            let preload_table = package_module.raw_get_into("preload")
+                .unwrap_or(LuaValue::NIL)
+                .not_nil();
+
+            if let Some(preload) = preload_table {    // If preload table is nil, no preloading attempt is made, otherwise, coerce to a table.
+                let loader = preload.index_with_metatable(&LuaValue::from(module_name.clone()), &execstate.metatables)?;
+                let load_result = match vm::helper::do_call_from_rust(require, loader, execstate, &[LuaValue::from(module_name.clone())]) {
+                    Ok(r) => r,
+                    Err(err) => return Err(err),
+                };
+                match load_result.into_first() {
+                    LuaValue::NIL => {
+                        loaded_table.write_index_with_metatable(LuaValue::from(module_name), LuaValue::from(true), &execstate.metatables)?;
+                        Varargs::from(true)
+                    },
+                    module @ _ => {
+                        loaded_table.write_index_with_metatable(LuaValue::from(module_name), module.clone(), &execstate.metatables)?;
+                        Varargs::from(module)
+                    }
+                }
+            } else {
+                // TODO: Implement other loaders
+                Err(LuaError::user_string(format!("Unknown module: {}", module_name)))?
+            }
+        } else {
+            Err(LuaError::user_str("Package module was unloaded!"))?
+        }
     };
     result.trace(require)
 }
@@ -61,6 +98,7 @@ fn replace_bytes(search_text: &[u8], pattern: &[u8], replacement: &[u8]) -> Vec<
     if pattern.len() > 0 {
         let mut text_buffer = Vec::with_capacity(search_text.len());   // We assume sep.len() == rep.len()
         let mut find_buffer = Vec::with_capacity(pattern.len());
+
         for byte in search_text {
             if *byte == pattern[find_buffer.len()] {
                 find_buffer.push(*byte);
@@ -97,8 +135,9 @@ pub fn searchpath(_execstate: &mut ExecutionState, params: &[LuaValue]) -> Resul
         let rep = rep.as_ref().map(LuaString::as_bytes).unwrap_or(b".");
 
         let name = replace_bytes(name.as_bytes(), sep, rep);
-        let mut files = <[u8]>::split(paths.as_bytes(), |b| *b == b';').map(|path| replace_bytes(path, b"?", &name[..])).collect::<Vec<Vec<u8>>>();
-
+        let mut files = <[u8]>::split(paths.as_bytes(), |b| *b == b';')
+            .map(|path| replace_bytes(path, b"?", &name[..]))
+            .collect::<Vec<Vec<u8>>>();
 
         for (index, file) in files.iter().enumerate() {
             let os_string = {
@@ -144,6 +183,7 @@ pub fn insert_package_lib(execstate: &mut ExecutionState) {
     table.set("searchers", SEARCHERS()).unwrap();
     set_table!(table, searchpath);
 
-    execstate.global_env.insert("require", LuaValue::FUNCTION(LuaFunction::RUST_FUNCTION(require)));
-    execstate.global_env.insert("package", LuaValue::from(table));
+    execstate.global_env.raw_set("require", LuaFunction::RUST_FUNCTION(require)).expect("Raw set with string key should not error!");
+    execstate.global_env.raw_set("package", table.clone()).expect("Raw set with string key should not error!");
+    execstate.modules.insert("package", table);
 }

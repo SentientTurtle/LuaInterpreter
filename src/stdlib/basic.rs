@@ -1,6 +1,6 @@
 use crate::error::{TracedError, LuaError, ArgumentError, Traceable};
 use crate::vm::ExecutionState;
-use crate::vm;
+use crate::{vm, constants};
 use std::rc::Rc;
 use std::cell::RefCell;
 use crate::constants::types::{LUA_INT, LUA_FLOAT};
@@ -11,7 +11,10 @@ use crate::types::value::number::LuaNumber;
 use crate::types::value::function::{LuaFunction, NativeClosure};
 use crate::types::parameters::LuaParameters;
 use crate::types::value::table::LuaTable;
-use crate::types::{LuaType, CoerceFrom};
+use crate::types::{LuaType, CoerceFrom, value};
+use crate::util::Union2;
+use crate::bytecode;
+use crate::compiler::{DefaultCompiler, LuaCompiler};
 
 pub fn assert(execstate: &mut ExecutionState, params: &[LuaValue]) -> Result<Varargs, TracedError> {
     match params.first() {
@@ -61,7 +64,7 @@ pub fn getmetatable(execstate: &mut ExecutionState, params: &[LuaValue]) -> Resu
             Ok(Varargs::nil())
         }
     } else {
-        Err(TracedError::from_rust(ArgumentError::InvalidArgument { expected: "value", found: "no value", index: 0 }, getmetatable))
+        Err(TracedError::from_rust(ArgumentError::InvalidArgument { expected: "value".to_string(), found: "no value", index: 0 }, getmetatable))
     }
 }
 
@@ -84,8 +87,97 @@ pub fn ipairs(_execstate: &mut ExecutionState, params: &[LuaValue]) -> Result<Va
     result.trace(ipairs)
 }
 
-pub fn load(_execstate: &mut ExecutionState, _params: &[LuaValue]) -> Result<Varargs, TracedError> {
-    unimplemented!()
+pub fn load(execstate: &mut ExecutionState, params: &[LuaValue]) -> Result<Varargs, TracedError> {
+    enum Mode {
+        Binary,
+        Text,
+        BinaryOrText
+    }
+
+    let result: Result<Varargs, LuaError> = try {
+        let chunk = params.try_coerce_any::<LuaString, LuaFunction>(0)?;
+        let chunkname = params.opt_coerce_coalesce_nil::<LuaString>(1);
+        let mode = params.opt_coerce_coalesce_nil::<LuaString>(2);
+        let env = params.opt_coerce::<LuaValue>(3);
+
+        let mode = match mode {
+            Some(Ok(string)) => {
+                match string.as_bytes() {
+                    b"b" => Mode::Binary,
+                    b"t" => Mode::Text,
+                    b"bt" => Mode::BinaryOrText,
+                    _ => {
+                        return Err(LuaError::user_string(format!("Unknown load mode {} expected `b`, `t`, or `bt`", string)))?;
+                    }
+                }
+            },
+            Some(Err(err)) => Err(err)?,
+            None => Mode::BinaryOrText
+        };
+        let mut prototype = match chunk {
+            Union2::One(string) => {
+                let mut bytes = string.as_bytes();
+                match mode {
+                    Mode::Binary => bytecode::loader::load_chunk(&mut bytes)?,
+                    Mode::Text => DefaultCompiler::compile(&mut bytes)?,
+                    Mode::BinaryOrText => {
+                        if bytes.len() > constants::LUA_SIGNATURE.len() && &bytes[0..constants::LUA_SIGNATURE.len()] == constants::LUA_SIGNATURE {
+                            bytecode::loader::load_chunk(&mut bytes)?
+                        } else {
+                            DefaultCompiler::compile(&mut bytes)?
+                        }
+                    },
+                }
+            },
+            Union2::Two(function) => {
+                let mut chunk = Vec::new();
+                loop {  // TODO: Add break condition in case of infinite loop
+                    match vm::helper::do_call_from_rust(load, LuaValue::from(function.clone()), execstate, &[]) {
+                        Ok(chunkpiece) => {
+                            match chunkpiece.opt(0) {
+                                None | Some(LuaValue::NIL) => break,
+                                Some(LuaValue::STRING(string)) if string.len() == 0 => break,
+                                Some(LuaValue::STRING(string)) => {
+                                    chunk.extend_from_slice(string.as_bytes())
+                                },
+                                Some(value) => {
+                                    return Ok(Varargs::from((LuaValue::NIL, format!("reader function must return a string, found: {}", value))))
+                                }
+                            }
+                        },
+                        Err(err) => return Err(err),
+                    }
+                }
+
+                let mut bytes = &chunk[..];
+                match mode {
+                    Mode::Binary => bytecode::loader::load_chunk(&mut bytes)?,
+                    Mode::Text => DefaultCompiler::compile(&mut bytes)?,
+                    Mode::BinaryOrText => {
+                        if bytes.len() > constants::LUA_SIGNATURE.len() && &bytes[0..constants::LUA_SIGNATURE.len()] == constants::LUA_SIGNATURE {
+                            bytecode::loader::load_chunk(&mut bytes)?
+                        } else {
+                            DefaultCompiler::compile(&mut bytes)?
+                        }
+                    },
+                }
+            },
+        };
+
+        if let Some(name) = chunkname {
+            let name = name?;
+            prototype.source_string.replace(name);
+        }
+
+        let env = if let Some(environment) = env {
+            environment?
+        } else {
+            LuaValue::from(execstate.global_env.clone())
+        };
+        
+        Varargs::from(LuaFunction::from_proto_with_env(prototype, env))
+    };
+    result.trace(load)
 }
 
 pub fn loadfile(_execstate: &mut ExecutionState, _params: &[LuaValue]) -> Result<Varargs, TracedError> {
@@ -113,15 +205,16 @@ pub fn pairs(execstate: &mut ExecutionState, params: &[LuaValue]) -> Result<Vara
 
         Ok(Varargs::from((LuaValue::from(LuaFunction::RUST_FUNCTION(next)), val.clone(), LuaValue::NIL)))
     } else {
-        Err(TracedError::from_rust(ArgumentError::InvalidArgument { expected: "value", found: "no value", index: 0 }, pairs))
+        Err(TracedError::from_rust(ArgumentError::InvalidArgument { expected: "value".to_string(), found: "no value", index: 0 }, pairs))
     }
 }
 
+// TODO: Check how this interacts with __call
 pub fn pcall(execstate: &mut ExecutionState, params: &[LuaValue]) -> Result<Varargs, TracedError> {
     let (func, params) = params.split_first()
         .ok_or(TracedError::from_rust(
             ArgumentError::InvalidArgument {
-                expected: "function",
+                expected: "function".to_string(),
                 found: params.first().unwrap_or(&LuaValue::NIL).type_name(),
                 index: 0,
             },
@@ -188,7 +281,7 @@ pub fn rawlen(_execstate: &mut ExecutionState, params: &[LuaValue]) -> Result<Va
     match params.first() {
         Some(LuaValue::TABLE(t)) => Ok(Varargs::from(LuaValue::from(t.len()))),
         Some(LuaValue::STRING(s)) => Ok(Varargs::from(LuaValue::from(s.len()))),
-        Some(_) | None => Err(TracedError::from_rust(ArgumentError::InvalidArgument { expected: "table or string", found: params.get_value_or_nil(0).type_name(), index: 0 }, rawlen))
+        Some(_) | None => Err(TracedError::from_rust(ArgumentError::InvalidArgument { expected: "table or string".to_string(), found: params.get_value_or_nil(0).type_name(), index: 0 }, rawlen))
     }
 }
 
@@ -210,7 +303,7 @@ pub fn select(_execstate: &mut ExecutionState, params: &[LuaValue]) -> Result<Va
         if index > 0 {
             Ok(Varargs::from(params.get(index as usize).map(LuaValue::clone).unwrap_or(LuaValue::NIL)))
         } else {
-            Err(ArgumentError::InvalidArgument { expected: ">0 integer index", found: params.get_value_or_nil(0).type_name(), index: 0 })
+            Err(ArgumentError::InvalidArgument { expected: ">0 integer index".to_string(), found: params.get_value_or_nil(0).type_name(), index: 0 })   // TODO: Make found also a string for more descriptive errors
         }?
     };
     result.trace(select)
@@ -220,7 +313,6 @@ pub fn setmetatable(_execstate: &mut ExecutionState, params: &[LuaValue]) -> Res
     let result: Result<Varargs, LuaError> = try {
         let table = params.try_coerce::<LuaTable>(0)?;
         let new_metatable = params.try_coerce::<LuaTable>(1)?;
-        println!("Setting {:?}'s metatable to {}", table, new_metatable);
         if let Some(current_metatable) = table.metatable() {
             if let Ok(_) = current_metatable.raw_get_into("__metatable") {
                 Err(LuaError::user_str("cannot change protected metatable"))?;
@@ -266,7 +358,7 @@ pub fn tostring(execstate: &mut ExecutionState, params: &[LuaValue]) -> Result<V
         }
         Ok(Varargs::from(LuaValue::from(format!("{}", val))))
     } else {
-        Err(TracedError::from_rust(ArgumentError::InvalidArgument { expected: "value", found: "no value", index: 0 }, pairs))
+        Err(TracedError::from_rust(ArgumentError::InvalidArgument { expected: "value".to_string(), found: "no value", index: 0 }, pairs))
     }
 }
 
@@ -274,15 +366,16 @@ pub fn lua_type(_execstate: &mut ExecutionState, params: &[LuaValue]) -> Result<
     if let Some(val) = params.first() {
         Ok(Varargs::from(LuaValue::from(val.type_name())))
     } else {
-        Err(TracedError::from_rust(ArgumentError::InvalidArgument { expected: "value", found: "no value", index: 0 }, pairs))
+        Err(TracedError::from_rust(ArgumentError::InvalidArgument { expected: "value".to_string(), found: "no value", index: 0 }, pairs))
     }
 }
 
 pub const VERSION: &str = "Lua 5.3";
 
+// TODO: Check how this interacts with __call
 pub fn xpcall(execstate: &mut ExecutionState, params: &[LuaValue]) -> Result<Varargs, TracedError> {
-    let (func, remainder) = params.split_first().ok_or(TracedError::from_rust(ArgumentError::InvalidArgument { expected: "function", found: params.get_value_or_nil(0).type_name(), index: 0}, pcall))?;
-    let (handler, params) = remainder.split_first().ok_or(TracedError::from_rust(ArgumentError::InvalidArgument { expected: "message handler", found: remainder.get_value_or_nil(0).type_name(), index: 1}, pcall))?;
+    let (func, remainder) = params.split_first().ok_or(TracedError::from_rust(ArgumentError::InvalidArgument { expected: "function".to_string(), found: params.get_value_or_nil(0).type_name(), index: 0}, pcall))?;
+    let (handler, params) = remainder.split_first().ok_or(TracedError::from_rust(ArgumentError::InvalidArgument { expected: "message handler".to_string(), found: remainder.get_value_or_nil(0).type_name(), index: 1}, pcall))?;
 
     let (call_result, is_err) = match vm::helper::do_call_from_rust(pcall, func.clone(), execstate, params) {
         Ok(result) => (result, false),
@@ -301,7 +394,7 @@ pub fn insert_basic_lib(execstate: &mut ExecutionState) {
             set_global!($execstate, stringify!($func), $func)
         };
         ($execstate:ident, $name:expr, $func:ident) => {
-            $execstate.global_env.insert($name, LuaValue::FUNCTION(LuaFunction::RUST_FUNCTION($func)));
+            $execstate.global_env.raw_set($name, LuaValue::FUNCTION(LuaFunction::RUST_FUNCTION($func))).expect("Raw set with string key should not error!");
         };
     }
 
@@ -327,6 +420,6 @@ pub fn insert_basic_lib(execstate: &mut ExecutionState) {
     set_global!(execstate, tonumber);
     set_global!(execstate, tostring);
     set_global!(execstate, "type", lua_type);
-    execstate.global_env.insert("_VERSION", LuaValue::from(VERSION));
+    execstate.global_env.raw_set("_VERSION", VERSION  ).expect("Raw set with string key should not error!");
     set_global!(execstate, "xpcall", xpcall);
 }

@@ -11,9 +11,16 @@ pub mod types {
     pub type _HOST_LONG = i64;
     pub type HOST_OBJECT_SIZE = usize;
     pub type LUA_INT = i64;
-    pub type LUA_INT_UNSIGNED = i64;
+    pub type LUA_INT_UNSIGNED = u64;
     pub type LUA_FLOAT = f64;
     pub type LUA_INSTRUCTION = u32;
+
+
+    static _ASSERTIONS: () = {   // TODO: Perhaps wrap in a macro
+        if std::mem::size_of::<LUA_INT>() != std::mem::size_of::<LUA_INT_UNSIGNED>() {
+            panic!("Signed and Unsigned LUA_INT must have equal size in memory!")
+        };
+    };
 }
 
 #[allow(unused)]
@@ -101,7 +108,8 @@ pub mod opcodes {
     pub const VARARG: u8 = 45;
     pub const EXTRAARG: u8 = 46;
 
-    pub fn name(opcode: u8) -> &'static str {
+    // TODO: Possibly remove
+    pub fn _name(opcode: u8) -> &'static str {
         match opcode {
             MOVE => "MOVE",
             LOADK => "LOADK",

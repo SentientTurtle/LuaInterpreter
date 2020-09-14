@@ -324,5 +324,6 @@ pub fn insert_math_lib(execstate: &mut ExecutionState) {
     set_table!(table, "type", numtype);
     set_table!(table, ult);
 
-    execstate.global_env.insert("math", LuaValue::from(table));
+    execstate.global_env.raw_set("math", table.clone()).expect("Raw set with string key should not error!");
+    execstate.modules.insert("math", table);
 }

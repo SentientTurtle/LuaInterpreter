@@ -115,6 +115,13 @@ impl LuaString {
             LuaString::BINARY(s) => s.len(),
         }
     }
+
+    pub fn is_utf8(&self) -> bool {
+        match self {
+            LuaString::UNICODE(_) => true,
+            LuaString::BINARY(_) => false,
+        }
+    }
 }
 
 impl AsRef<[u8]> for LuaString {

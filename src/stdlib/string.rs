@@ -2,7 +2,7 @@ use crate::vm;
 use crate::vm::ExecutionState;
 use crate::error::{TracedError, ArgumentError, Traceable};
 use crate::stdlib::string::pattern::compile_pattern;
-use nom::{FindSubstring, AsBytes};
+use nom::{FindSubstring, AsBytes, IResult};
 use crate::util::Union3;
 use regex::bytes::Captures;
 
@@ -14,6 +14,14 @@ use crate::types::value::table::LuaTable;
 use crate::types::parameters::LuaParameters;
 use crate::types::{LuaType, CoerceFrom};
 use crate::constants::types::LUA_INT;
+use nom::lib::std::fmt::{Debug, Formatter};
+use std::fmt;
+use nom::multi::{many0, many1};
+use nom::branch::alt;
+use nom::combinator::{map, opt};
+use nom::character::complete::none_of;
+use nom::bytes::complete::{tag, is_a};
+use nom::sequence::tuple;
 
 fn relative_index_to_absolute(index: i64, string: &LuaString) -> usize {
     if index >= 0 {
@@ -59,7 +67,7 @@ pub fn char(_execstate: &mut ExecutionState, params: &[LuaValue]) -> Result<Vara
             LuaValue::NUMBER(num) if (0..255_i64).contains(&num.as_int().unwrap_or(-1)) => { // Check that "num" is an integer between 0 and 255
                 vec.push(num.as_int().unwrap() as u8);
             }
-            _ => return Err(TracedError::from_rust(ArgumentError::InvalidArgument { expected: "byte (0-254)", found: params.get_value_or_nil(index).type_name(), index }, char))
+            _ => return Err(TracedError::from_rust(ArgumentError::InvalidArgument { expected: "byte (0-254)".to_string(), found: params.get_value_or_nil(index).type_name(), index }, char))
         }
     }
 
@@ -70,7 +78,7 @@ pub fn dump(_execstate: &mut ExecutionState, params: &[LuaValue]) -> Result<Vara
     let result: Result<Varargs, ArgumentError> = try {
         let closure = params.try_coerce::<LuaClosure>(0)?;
         let mut bytes = Vec::new();
-        crate::bytecode::write::write_chunk(&closure.borrow().proto, &mut bytes);
+        crate::bytecode::dumper::dump_chunk(&closure.borrow().proto, &mut bytes);
         Varargs::from(LuaString::from(bytes.into_boxed_slice()))
     };
     result.trace(dump)
@@ -123,6 +131,7 @@ pub fn find(_execstate: &mut ExecutionState, params: &[LuaValue]) -> Result<Vara
     result.trace(find)
 }
 
+#[derive(Debug)]
 struct FormatFlags {
     left_justify: bool,
     force_sign: bool,
@@ -140,41 +149,100 @@ enum FormatElement {
     },
 }
 
+impl Debug for FormatElement {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            FormatElement::RawString(vec) => {
+                f.debug_tuple("FormatElement").field(&String::from_utf8_lossy(&vec[..])).finish()
+            }
+            FormatElement::Format { flags, width, precision, specifier } => {
+                f.debug_struct("FormatElement")
+                    .field("flags", flags)
+                    .field("width", width)
+                    .field("precision", precision)
+                    .field("specifier", &(*specifier as char))
+                    .finish()
+            }
+        }
+    }
+}
+
 type StringFormat = Vec<FormatElement>;
 
-// TODO: Rewrite with functions
-named!(parse_format<&[u8], StringFormat>,
-    many0!(alt!(
-        map!(many1!(none_of!("%")), |v| FormatElement::RawString(v.iter().map(|c| *c as u8).collect())) |
-        map!(tag!("%%"), |_| FormatElement::RawString(Vec::from(&b"%"[..]))) |
-        map!(
-            tuple!(
-                tag!("%"),
-                map!(is_a!("-+ #"), |v| FormatFlags { left_justify: v.contains(&('-' as u8)), force_sign: v.contains(&('+' as u8)), pad_sign: v.contains(&(' ' as u8)), hash: v.contains(&('#' as u8)) }),
-                map!(is_a!("0123456789"), |num| if num.len() > 0 { Some((std::str::from_utf8(num).unwrap().parse::<usize>().unwrap(), num[0] == 0)) } else { None } ),
-                opt!(tuple!(tag!("."), map!(is_a!("0123456789"), |num| if num.len() > 0 { Some(std::str::from_utf8(num).unwrap().parse::<usize>().unwrap()) } else { Some(0) } ))),
-                alt!(
-                    tag!("d") | tag!("i") | tag!("u") | tag!("o") | tag!("x") | tag!("X") | tag!("f") | tag!("F") |
-                    tag!("e") | tag!("E") | tag!("g") | tag!("G") | tag!("a") | tag!("A") | tag!("c") | tag!("s") |
-                    tag!("p") | tag!("n") | tag!("q")
-                )
+fn parse_format(i: &[u8]) -> IResult<&[u8], StringFormat> {
+    many0(
+        alt((
+            map(
+                many1(none_of("%")),
+                |v| FormatElement::RawString(v.iter().map(|c| *c as u8).collect()),
             ),
-            |tuple| FormatElement::Format { flags: tuple.1, width: tuple.2, precision: tuple.3.and_then(|t| t.1), specifier: tuple.4[0] }
-        )
-    ))
-);
+            map(
+                tag("%%"),
+                |_| FormatElement::RawString(Vec::from(&b"%"[..])),
+            ),
+            map(
+                tuple((
+                    tag("%"),
+                    map(
+                        opt(is_a("-+ #")),
+                        |v: Option<&[u8]>| {
+                            let v = v.unwrap_or(b"");
+                            FormatFlags {
+                                left_justify: v.contains(&b'-'),
+                                force_sign: v.contains(&b'+'),
+                                pad_sign: v.contains(&b' '),
+                                hash: v.contains(&b'#'),
+                            }
+                        },
+                    ),
+                    map(
+                        opt(is_a("0123456789")),
+                        |num: Option<&[u8]>| {
+                            let num = num.unwrap_or(b"");
+                            if num.len() > 0 {
+                                Some((std::str::from_utf8(num).unwrap().parse::<usize>().unwrap(), num[0] == 0))
+                            } else {
+                                None
+                            }
+                        },
+                    ),
+                    opt(tuple((
+                        tag("."),
+                        map(
+                            is_a("0123456789"),
+                            |num: &[u8]| if num.len() > 0 {
+                                Some(std::str::from_utf8(num).unwrap().parse::<usize>().unwrap())
+                            } else {
+                                Some(0)
+                            },
+                        )
+                    ))),
+                    alt((
+                        tag("d"), tag("i"), tag("u"), tag("o"), tag("x"), tag("X"), tag("f"), tag("F"),
+                        tag("e"), tag("E"), tag("g"), tag("G"), tag("a"), tag("A"), tag("c"), tag("s"),
+                        tag("p"), tag("n"), tag("q")
+                    ))
+                )),
+                |tuple| FormatElement::Format {
+                    flags: tuple.1,
+                    width: tuple.2,
+                    precision: tuple.3.and_then(|t| t.1),
+                    specifier: tuple.4[0],
+                },
+            )
+        ))
+    )(i)
+}
 
-#[allow(unused)]    // TODO: This function is a mess and needs to be fixed
+// TODO: This function is a mess and needs to be fixed
 pub fn format(_execstate: &mut ExecutionState, params: &[LuaValue]) -> Result<Varargs, TracedError> {   // TODO: Extract formatting to the utility module
     let result: Result<Varargs, ArgumentError> = try {
         let format_string = params.try_coerce::<LuaString>(0)?;
-        debug_assert!(params.len() > 0);    // We can assume this as the above fails with length 0
-        let arguments = &params[1..];
         match parse_format(format_string.as_bytes()) {
-            Ok((_, format_string)) => {
+            Ok((_, string_format)) => {
                 let mut index = 1;
                 let mut results = Vec::new();
-                for element in format_string {
+                for element in string_format {
                     match element {
                         FormatElement::RawString(string) => results.extend_from_slice(&string[..]),
                         FormatElement::Format { flags, width: width_options, precision: precision_option, specifier } => {
@@ -227,37 +295,52 @@ pub fn format(_execstate: &mut ExecutionState, params: &[LuaValue]) -> Result<Va
                                                 }
                                             }
                                         }
-                                        (Some((width, pad_zeros)), Some(precision)) => {}
-                                        (None, None) => {}
-                                    }
+                                        (Some((width, _)), Some(precision)) => {
+                                            string = format!("{:0width$}", string, width = precision);
+                                            if value < 0 {
+                                                string = format!("-{}", string);
+                                            } else if flags.force_sign {
+                                                string = format!("+{}", string);
+                                            }
 
-                                    // TODO: What?
-                                    // Pad to [width]
-                                    if flags.left_justify {
-                                        if let Some((width, pad_with_zeros)) = width_options {}
-                                    } else {}
+                                            if flags.left_justify {     // Pads with space regardless of pad_zero flag
+                                                string = format!("{:<width$}", string, width = width);
+                                            } else {
+                                                string = format!("{:width$}", string, width = width.saturating_sub(0));
+                                            }
+                                        }
+                                        (None, None) => {
+                                            if value < 0 {
+                                                string = format!("-{}", string);
+                                            } else if flags.force_sign {
+                                                string = format!("+{}", string);
+                                            }
+                                        }
+                                    }
+                                    results.extend_from_slice(string.as_bytes())
                                 }
-                                'u' => {}
-                                'o' => {}
-                                'x' | 'X' => {}
-                                'f' | 'F' => {}
-                                'e' | 'E' => {}
-                                'g' | 'G' => {}
-                                'a' | 'A' => {}
-                                'c' => {}
-                                's' => {}
-                                'q' => {}
+                                // 'u' => {}
+                                // 'o' => {}
+                                // 'x' | 'X' => {}
+                                // 'f' | 'F' => {}
+                                // 'e' | 'E' => {}
+                                // 'g' | 'G' => {}
+                                // 'a' | 'A' => {}
+                                // 'c' => {}
+                                // 's' => {}
+                                // 'q' => {}
                                 _ => unreachable!("Unexpected specifier: {}", specifier)
                             }
                         }
-                    }
+                    };
                 }
+
+                Varargs::from(LuaString::from(results.into_boxed_slice()))
             }
             Err(err) => {
                 return Err(TracedError::from_rust(ArgumentError::InvalidPatternOrFormat { message: format!("{}", err) }, format));
             }
         }
-        unimplemented!()
     };
     result.trace(format)
 }
@@ -312,7 +395,7 @@ pub fn gsub(execstate: &mut ExecutionState, params: &[LuaValue]) -> Result<Varar
             }
             Some(LuaValue::TABLE(t)) => Union3::Two(t),
             Some(LuaValue::FUNCTION(f)) => Union3::Three(f),
-            _ => return Err(TracedError::from_rust(ArgumentError::InvalidArgument { expected: "string, table or function", found: params.get_value_or_nil(2).type_name(), index: 2 }, gsub))
+            _ => return Err(TracedError::from_rust(ArgumentError::InvalidArgument { expected: "string, table or function".to_string(), found: params.get_value_or_nil(2).type_name(), index: 2 }, gsub))
         };
         // TODO Check 'as usize' conversion for negative numbers elsewhere; it's a mem::transmute!
         let n = params.try_coerce::<LUA_INT>(3).ok().map(|i| i.max(0) as usize);
@@ -439,6 +522,7 @@ pub fn packsize(_execstate: &mut ExecutionState, params: &[LuaValue]) -> Result<
         for byte in format_string.as_bytes() {
             size += match byte {
                 b'b' | b'B' => mem::size_of::<HOST_BYTE>(),
+                b'j' | b'J' => mem::size_of::<LUA_INT>(),
                 _ => Err(ArgumentError::InvalidPatternOrFormat { message: format!("Unknown pack format option: {}", *byte as char) })?
             };
         }
@@ -523,7 +607,11 @@ pub fn insert_string_lib(execstate: &mut ExecutionState) {
     set_table!(table, unpack);
     set_table!(table, upper);
 
-    execstate.global_env.insert("string", LuaValue::from(table));
+    let metatable = LuaTable::empty();
+    metatable.raw_set("__index", table.clone()).expect("Raw set with string key should not error!");
+    execstate.metatables.string.replace(metatable);
+    execstate.global_env.raw_set("string", table.clone()).expect("Raw set with string key should not error!");
+    execstate.modules.insert("string", table.clone());
 }
 
 pub mod pattern {

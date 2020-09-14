@@ -12,6 +12,7 @@ use crate::vm::ExecutionState;
 use crate::types::varargs::Varargs;
 use crate::error::TracedError;
 use crate::types::{AsLuaPointer, ref_to_pointer, LuaType, CoerceFrom};
+use crate::constants::LUA_FIELDS_PER_FLUSH;
 
 pub struct Prototype {
     // TODO: Extract debug info to it's own type
@@ -73,7 +74,7 @@ impl Display for Prototype {
             let b = (instruction >> 23) as usize & 0b1_1111_1111;
             let c = (instruction >> 14) as usize & 0b1_1111_1111;
             let bx = (instruction >> 14) as usize & 0b11_1111_1111_1111_1111;
-            let sbx = ((instruction >> 14) as usize & 0b11_1111_1111_1111_1111) as isize - (18isize.pow(2) / 2);
+            let sbx = ((instruction >> 14) as usize & 0b11_1111_1111_1111_1111) as isize - ((2isize.pow(18) / 2)-1);
             let b_rk = if b >> 8 == 1 { format!("K({})", self.constants.get(b & 0b0_1111_1111).unwrap_or(&LuaValue::NIL)) } else { format!("R({})", b & 0b0_1111_1111) };
             let c_rk = if c >> 8 == 1 { format!("K({})", self.constants.get(c & 0b0_1111_1111).unwrap_or(&LuaValue::NIL)) } else { format!("R({})", c & 0b0_1111_1111) };
 
@@ -105,11 +106,11 @@ impl Display for Prototype {
                 SHL => format!("SHL\tR({}) = {} << {}", a, b_rk, c_rk),
                 SHR => format!("SHR\tR({}) = {} >> {}", a, b_rk, c_rk),
                 UNM => format!("UNM\tR({}) = -R({})", a, b),
-                BNOT => format!("UNM\tR({}) = ~R({})", a, b),
-                NOT => format!("UNM\tR({}) = not R({})", a, b),
-                LEN => format!("UNM\tR({}) = #R({})", a, b),
+                BNOT => format!("BNOT\tR({}) = ~R({})", a, b),
+                NOT => format!("NOT\tR({}) = not R({})", a, b),
+                LEN => format!("LEN\tR({}) = #R({})", a, b),
                 CONCAT => format!("CONCAT\tR({}) = R({}) .. ... .. R({})", a, b, c),
-                JMP => format!("JMP\tjump {:+}", sbx),
+                JMP => format!("JMP\tto {} ({:+})", (index as isize) + sbx + 2, sbx),   // Offset the target index by 2; One as the display indices start at 1 whereas the opcode-array starts at 0, and one to accomodate the fact that lua-jumps occur after the program counter has been incremented.
                 EQ => format!("EQ\tif {} {} {} then skip", b_rk, if a == 0 { "==" } else { "!=" }, c_rk),
                 LT => format!("LT\tif {} {} {} then skip", b_rk, if a == 0 { "<" } else { ">=" }, c_rk),
                 LE => format!("LE\tif {} {} {} then skip", b_rk, if a == 0 { "<=" } else { ">" }, c_rk),
@@ -117,11 +118,11 @@ impl Display for Prototype {
                 TESTSET => format!("TESTSET\tif R({}) as bool != {} then skip else R({})=R({})", b, if c == 0 { "false" } else { "true" }, a, b),
                 CALL => {
                     let parameters = if b == 0 {
-                        format!("R({}..=top)", a+1)
+                        format!("R({}..=top)", a + 1)
                     } else if b == 1 {
                         format!("")
                     } else {
-                        format!("R({}..={})", a+1, a+b-1)
+                        format!("R({}..={})", a + 1, a + b - 1)
                     };
                     let result = if c == 0 {
                         format!("R({}..=TOP) = ", a)
@@ -131,29 +132,36 @@ impl Display for Prototype {
                         format!("R({}..={}) = ", a, a + c - 2)
                     };
                     format!("CALL\t{}R({})({})", result, a, parameters)
-                },
-                TAILCALL => format!("TAILCALL\treturn R({})({}..={})", a, a+1, a+b-2),
+                }
+                TAILCALL => format!("TAILCALL\treturn R({})({}..={})", a, a + 1, a + b - 2),
                 RETURN => {
                     if b == 0 {
                         format!("RETURN\treturn R({}..=top)", a)
                     } else if b == 1 {
                         format!("RETURN\treturn;")
                     } else {
-                        format!("RETURN\treturn R({}..={})", a, a+b-2)
+                        format!("RETURN\treturn R({}..={})", a, a + b - 2)
                     }
-                },
+                }
                 FORLOOP => format!("FORLOOP"),  // TODO
                 FORPREP => format!("FORPREP"),
-                TFORCALL => format!("TFORCALL"),
-                TFORLOOP => format!("TFORLOOP"),
-                SETLIST => format!("SETLIST"),
+                TFORCALL => format!("TFORCALL\tR({}..={}) = R({})(R({}), R({}))", a+3, a+2+c, a, a+1, a+2),
+                TFORLOOP => format!("TFORLOOP\tif R({}) != nil then R({}) = R({}); jump to {} ({:+})", a+1, a, a+1, index as isize + sbx + 2, sbx), // See #JMP for why this is incremented by 2
+                SETLIST => {
+                    let first_index = if c == 0 {
+                        self.code.get(index + 1).map(|t| *t).unwrap_or(0) as usize - 1    // unwrap_or(0) intentionally leads to a huge value here TODO: Replace with some kind of error
+                    } else {
+                        c - 1
+                    };
+                    format!("SETLIST\tR({})[{}..={}] = R({}..={})", a, first_index * LUA_FIELDS_PER_FLUSH + 1, first_index + b, a + 1, a+b)
+                },
                 CLOSURE => format!("CLOSURE"),
                 VARARG => format!("VARARG"),
                 EXTRAARG => format!("EXTRAARG"),
-                _ => format!("[UNKNOWN OPCODE]")
+                _ => format!("[UNKNOWN OPCODE] {}", instruction)
             };
 
-            write!(f, "{}\t{}\n", index, instruction_string)?;
+            write!(f, "{}\t{}\n", index + 1, instruction_string)?;
         }
         write!(f, "CONSTANTS: {}\n", self.constants.len())?;
         for (index, constant) in self.constants.iter().enumerate() {
@@ -205,9 +213,9 @@ impl Debug for ClosureImpl {
 }
 
 impl ClosureImpl {
-    pub fn from_proto_with_env(proto: Rc<Prototype>, env: LuaValue) -> ClosureImpl {
+    pub fn from_proto_with_env(proto: Prototype, env: LuaValue) -> ClosureImpl {
         ClosureImpl {
-            proto,
+            proto: Rc::from(proto),
             upvalues: vec![Upvalue::new_closed(env)],
             parent: None,
         }
@@ -270,11 +278,23 @@ pub enum LuaFunction {
     RUST_CLOSURE(NativeClosure),
 }
 
+impl LuaFunction {
+    pub fn from_proto_with_env(proto: Prototype, env: LuaValue) -> LuaFunction {
+        LuaFunction::LUA_CLOSURE(
+            Rc::from(
+                RefCell::from(
+                    ClosureImpl::from_proto_with_env(proto, env)
+                )
+            )
+        )
+    }
+}
+
 impl LuaType for LuaFunction {
     const CONTAINER_NAME: &'static str = "function";
 }
 
-impl<T: Into<LuaValue> + Clone> CoerceFrom<T> for LuaFunction{
+impl<T: Into<LuaValue> + Clone> CoerceFrom<T> for LuaFunction {
     fn coerce(value: &T) -> Option<Self> {
         if let LuaValue::FUNCTION(func) = value.clone().into() {
             Some(func)
