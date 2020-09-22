@@ -1,11 +1,9 @@
-use std::io::{Read, ErrorKind, Error, Write};
-use std::process::{Command, Stdio, ChildStdout};
+use std::io::Read;
+use std::process::{Command, Stdio};
 use std::io;
 use crate::error::CompileError;
 use crate::types::value::function::Prototype;
 use crate::bytecode;
-use std::fs::File;
-use std::path::Path;
 
 pub type DefaultCompiler = LuaC;
 
@@ -27,7 +25,7 @@ impl LuaCompiler for LuaC {
         if let Some(stdin) = &mut process.stdin {
             match io::copy(reader, stdin) {
                 Ok(_) => {}
-                Err(err) => {
+                Err(_err) => {
                     // Maybe log this somewhere? In practice the output should provide more detail
                 },
             };

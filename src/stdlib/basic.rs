@@ -11,7 +11,7 @@ use crate::types::value::number::LuaNumber;
 use crate::types::value::function::{LuaFunction, NativeClosure};
 use crate::types::parameters::LuaParameters;
 use crate::types::value::table::LuaTable;
-use crate::types::{LuaType, CoerceFrom, value};
+use crate::types::{LuaType, CoerceFrom};
 use crate::util::Union2;
 use crate::bytecode;
 use crate::compiler::{DefaultCompiler, LuaCompiler};

@@ -72,7 +72,7 @@ impl LuaTable {
     }
 
     pub fn raw_set<K: Into<LuaValue>, V: Into<LuaValue>>(&self, key: K, value: V) -> Result<(), ArgumentError> {
-        self.set(key, value)
+        self.set(key, value)    // TODO: Wait what?
     }
 
     // Note to self: _DO NOT ENTER KEY/VALUE REFCELLS IN THIS METHOD_
@@ -80,6 +80,7 @@ impl LuaTable {
     pub fn set<K: Into<LuaValue>, V: Into<LuaValue>>(&self, key: K, value: V) -> Result<(), ArgumentError> {
         let key = key.into();
         let value = value.into();
+        println!("K:{} V:{}", key, value);
         if key == LuaValue::NIL {
             return Err(ArgumentError::TableKeyIsNil);
         }

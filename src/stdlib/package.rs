@@ -8,18 +8,18 @@ use crate::types::parameters::LuaParameters;
 use crate::types::value::string::LuaString;
 use std::ffi::OsString;
 use std::fs::File;
-use crate::types::CoerceFrom;
 use crate::vm;
 
 pub fn require(execstate: &mut ExecutionState, params: &[LuaValue]) -> Result<Varargs, TracedError> {
     let result: Result<Varargs, LuaError> = try {
         let module_name = params.try_coerce::<LuaString>(0)?;
         // If a builtin library, try loading those from the execstate environment
+        // TODO: Maybe replace with a more generic execstate.modules.get() call, rather than matching the name?
         if let Some(name) = module_name.try_utf8().ok() {
             match name {
                 "coroutine" | "package" | "string" | "utf8" | "table" | "math" | "io" | "os" | "debug" => {
                     if let Some(value) = execstate.modules.get(name) {
-                        return Ok(Varargs::from(value.clone()));
+                        return Ok(Varargs::from(value.clone()));    // TODO: Maybe set package.loaded? And move this below that check?
                     }
                 }
                 _ => {}

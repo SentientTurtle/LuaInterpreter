@@ -38,6 +38,7 @@ fn do_test(file_name: &str) {
 
     eprintln!("Decoding script: {:?}", file_name);
     let proto = bytecode::loader::load_chunk(&mut &script_buffer[..]).unwrap();
+    println!("{}", proto);
     let mut closure = ClosureImpl::from_proto_with_env(proto, LuaValue::from(execstate.global_env.clone()));
     eprintln!("Running script: {:?}", file_name);
     match vm::execute_closure(&mut closure, &mut execstate, &[]) {

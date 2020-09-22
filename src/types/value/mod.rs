@@ -61,6 +61,12 @@ impl LuaType for LuaValue {
     }
 }
 
+impl Default for LuaValue {
+    fn default() -> Self {
+        LuaValue::NIL
+    }
+}
+
 impl From<bool> for LuaValue {
     fn from(b: bool) -> Self {
         LuaValue::BOOLEAN(b)

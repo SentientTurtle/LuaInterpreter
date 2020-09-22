@@ -75,6 +75,13 @@ impl LuaString {
         }
     }
 
+    pub fn as_str(&self) -> Option<&str> {
+        match self {
+            LuaString::UNICODE(string) => Some(string),
+            LuaString::BINARY(bytes) => None,
+        }
+    }
+
     pub fn append(self, other: &LuaString) -> LuaString {
         match self {
             LuaString::UNICODE(self_string) => {

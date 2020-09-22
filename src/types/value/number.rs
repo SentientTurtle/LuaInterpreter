@@ -10,7 +10,7 @@ use crate::types::value::LuaValue;
 
 #[derive(Copy, Clone, Debug)]
 pub enum LuaNumber {
-    INT(LUA_INT),
+    INT(LUA_INT),   // TODO: Make wrapping
     FLOAT(LUA_FLOAT),
 }
 

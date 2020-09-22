@@ -72,7 +72,6 @@ impl StackFrame {
 
 impl Drop for StackFrame {
     fn drop(&mut self) {
-        debug_assert_eq!(self.upvalues.len(), self.registers.len());
         for i in 0..self.upvalues.len() {
             if let Some(upval) = &self.upvalues[i] {
                 upval.close(self.registers.get_mut(i).unwrap().clone())
@@ -87,8 +86,9 @@ macro_rules! init_frame_vars {
         $registers = &mut $frame.$registers;
         #[allow(unused)]
         $pc = &mut $frame.$pc;
+        #[allow(unused)]    // TODO: Diagnose this one
         $proto = &mut $frame.$proto;
-        debug_assert_eq!($proto.max_stack_size as usize, $registers.len());
+        debug_assert_eq!($frame.upvalues.len(), $registers.len());
     };
 }
 
@@ -257,13 +257,16 @@ fn closure_loop(closure: &mut ClosureImpl, execstate: &mut ExecutionState, param
         }
     };
 
-    let mut registers = &mut frame.registers;
-    #[allow(unused)] let mut pc = &mut frame.pc;
-    let mut proto = &frame.proto;
-    debug_assert_eq!(proto.max_stack_size as usize, registers.len());
+    #[allow(unused)]    // IDE type hinting; Overwritten in loop
+        let mut registers = &mut frame.registers;
+
+    #[allow(unused)]
+        let mut pc = &mut frame.pc;
+
+    #[allow(unused)]    // IDE type hinting; Overwritten in loop
+        let mut proto = &frame.proto;
 
     // Variable used to extend the lifetime of tailcall parameters to that of the entire closure_loop call
-
     loop {
         init_frame_vars!(execstate, frame, registers, pc, proto);
         // Variables for stack trace
@@ -508,14 +511,16 @@ fn closure_loop(closure: &mut ClosureImpl, execstate: &mut ExecutionState, param
                     Ok(())
                 }
                 opcodes::TEST => {
-                    if bool::coerce_from(get_reg(registers, a)?)? != (c != 0) {
+                    let condition = bool::coerce_from(get_reg(registers, a)?)?;
+                    if if condition { 1 } else { 0 } != c {
                         *pc = *pc + 1
                     }
                     Ok(())
                 }
                 opcodes::TESTSET => {
-                    if bool::coerce_from(get_reg(registers, b)?)? == (c != 0) {
-                        *pc = *pc + 1
+                    let condition = bool::coerce_from(get_reg(registers, b)?)?;
+                    if if condition { 1 } else { 0 } != c {
+                        *pc = *pc + 1;
                     } else {
                         set_reg(registers, a, get_reg(registers, b)?.clone())?;
                     }
@@ -580,7 +585,7 @@ fn closure_loop(closure: &mut ClosureImpl, execstate: &mut ExecutionState, param
                         c - 1
                     };
 
-                    for i in a..a + result_count {
+                    for i in a..a + result_count {  // TODO: Resize registers if need be
                         set_reg(registers, i, result.n(i - a).clone())?;
                     }
                     Ok(())
@@ -689,8 +694,18 @@ fn closure_loop(closure: &mut ClosureImpl, execstate: &mut ExecutionState, param
                         0 => parameters.len(),
                         b => b - 1
                     };
+                    // Varadic functions have registers' length set to the minimum value, so we need to upsize when copying parameters
+                    for _ in registers.len()..(a + vararg_len) {
+                        registers.push(LuaValue::NIL);
+                    }
+
                     for i in 0..vararg_len {
                         set_reg(registers, a + i, parameters.get(i).map(LuaValue::clone).unwrap_or(LuaValue::NIL))?
+                    }
+
+                    let upvalues = &mut frame.upvalues;
+                    for _ in upvalues.len()..(a + vararg_len) {
+                        upvalues.push(None);
                     }
                     Ok(())
                 }
