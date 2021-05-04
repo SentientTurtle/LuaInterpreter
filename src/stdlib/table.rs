@@ -1,17 +1,19 @@
 use crate::vm::ExecutionState;
-use crate::error::{TracedError, ArgumentError, Traceable};
+use crate::error::{TracedError, TraceableError};
 use crate::types::value::LuaValue;
 use crate::types::value::string::LuaString;
 use crate::types::varargs::Varargs;
 use crate::types::value::table::LuaTable;
-use crate::types::value::function::LuaFunction;
+use crate::types::value::function::{LuaFunction, NativeFunction};
 use crate::types::parameters::LuaParameters;
 use crate::constants::types::LUA_INT;
 use crate::types::CoerceFrom;
+use crate::lua_func;
+use crate::trace_error;
 
 
 pub fn concat(_execstate: &mut ExecutionState, params: &[LuaValue]) -> Result<Varargs, TracedError> {
-    let result: Result<Varargs, ArgumentError> = try {
+    let result: Result<Varargs, TraceableError> = try {
         let mut is_utf8 = true;
 
         let table = params.try_coerce::<LuaTable>(0)?;
@@ -59,11 +61,11 @@ pub fn concat(_execstate: &mut ExecutionState, params: &[LuaValue]) -> Result<Va
             Varargs::from(LuaValue::from(buffer.into_boxed_slice()))
         }
     };
-    result.trace(concat)
+    trace_error!(result, concat)
 }
 
 pub fn unpack(_execstate: &mut ExecutionState, params: &[LuaValue]) -> Result<Varargs, TracedError> {
-    let result: Result<Varargs, ArgumentError> = try {
+    let result: Result<Varargs, TraceableError> = try {
         let table = params.try_coerce::<LuaTable>(0)?;
         let start = params.try_coerce::<LUA_INT>(1).unwrap_or(1);
         let end = params.try_coerce::<LUA_INT>(2).ok();
@@ -86,7 +88,7 @@ pub fn unpack(_execstate: &mut ExecutionState, params: &[LuaValue]) -> Result<Va
 
         Varargs::from(buffer)
     };
-    result.trace(concat)
+    trace_error!(result, unpack)
 }
 
 pub fn insert_table_lib(execstate: &mut ExecutionState) {

@@ -42,7 +42,9 @@ pub enum LuaValue {
     TABLE(LuaTable),
 }
 
-const LUA_NIL: LuaValue = LuaValue::NIL;
+impl LuaValue {
+    pub const CONST_NIL: LuaValue = LuaValue::NIL;
+}
 
 impl LuaType for LuaValue {
     const CONTAINER_NAME: &'static str = "value";
@@ -169,7 +171,7 @@ impl<T: Into<LuaValue> + Clone> CoerceFrom<T> for LuaValue {
 
 impl LuaValue {
     pub fn nil() -> &'static LuaValue {
-        &LUA_NIL
+        &LuaValue::CONST_NIL
     }
 }
 
@@ -387,7 +389,8 @@ impl PartialOrd for LuaValue {
     }
 }
 
-#[derive(Debug)]
+/// LuaValue struct that implements (full) Eq
+#[derive(Debug, Clone)]
 struct LuaValueFullEq {
     inner: LuaValue
 }

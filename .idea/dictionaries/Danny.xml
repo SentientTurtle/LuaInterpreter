@@ -1,6 +1,12 @@
 <component name="ProjectDictionaryState">
   <dictionary name="Danny">
     <words>
+      <w>bnot</w>
+      <w>bxor</w>
+      <w>execstate</w>
+      <w>keyerror</w>
+      <w>metamethod</w>
+      <w>tailcall</w>
       <w>tboolean</w>
       <w>tfloat</w>
       <w>tfunction</w>
@@ -14,6 +20,9 @@
       <w>ttable</w>
       <w>tthread</w>
       <w>tuserdata</w>
+      <w>upval</w>
+      <w>upvalue</w>
+      <w>upvalues</w>
       <w>userdata</w>
     </words>
   </dictionary>

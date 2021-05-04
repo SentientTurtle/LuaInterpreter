@@ -32,11 +32,11 @@ pub(super) fn get_const(proto: &Prototype, index: usize) -> Result<&LuaValue, By
     proto.constants.get(index).ok_or(ByteCodeError::ConstantIndexOutOfBounds { index, constants_length: proto.constants.len() })
 }
 
-pub(super) fn get_rk<'a, 'b: 'a>(proto: &'a Prototype, registers: &'b Vec<LuaValue>, rk: (bool, usize)) -> Result<&'a LuaValue, ByteCodeError> {
-    if rk.0 {
-        get_const(proto, rk.1)
+pub(super) fn get_rk<'a, 'b: 'a>(proto: &'a Prototype, registers: &'b Vec<LuaValue>, k: u8, index: usize) -> Result<&'a LuaValue, ByteCodeError> {
+    if k == 1 {
+        get_const(proto, index)
     } else {
-        get_reg(registers, rk.1)
+        get_reg(registers, index)
     }
 }
 

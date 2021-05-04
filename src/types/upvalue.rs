@@ -8,11 +8,12 @@ use std::fmt;
 pub struct UpvalueDesc {
     instack: u8,
     idx: u8,
+    kind: u8
 }
 
 impl UpvalueDesc {
-    pub fn new(instack: u8, idx: u8) -> Self {
-        UpvalueDesc { instack, idx }
+    pub fn new(instack: u8, idx: u8, kind: u8) -> Self {
+        UpvalueDesc { instack, idx, kind }
     }
 
     pub fn index(&self) -> usize {

@@ -25,6 +25,14 @@ impl Varargs {
         self.inner.drain(..).next().unwrap_or(LuaValue::NIL)
     }
 
+    pub fn into_array<const N: usize>(mut self) -> [LuaValue; N] {
+        let mut array = [LuaValue::CONST_NIL; N];
+        for (index, val) in self.inner.drain(0..N).enumerate() {
+            array[index] = val
+        }
+        array
+    }
+
     pub fn count(&self) -> usize {
         self.inner.len()
     }

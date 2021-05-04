@@ -5,7 +5,6 @@ use std::{fmt, io};
 use crate::types::value::string::LuaString;
 use crate::types::value::LuaValue;
 use crate::types::value::function::{Prototype, NativeFunction};
-use crate::types::varargs::Varargs;
 use std::io::Error;
 use crate::constants;
 
@@ -19,14 +18,19 @@ impl Debug for TraceEntry {
         match self {
             TraceEntry::LUA(program_counter, prototype) => {
                 let mut debug = f.debug_struct("TraceElement::LUA");
-                if let Some(line) = prototype.lineinfo.get( *program_counter) {
-                    debug.field("line", line);
+                if let Some(line) = prototype.get_line(*program_counter) {
+                    debug.field("line", &line);
                 }
-                debug.field("program_counter", program_counter).field("prototype", prototype).finish()
-            },
+                debug.field("program_counter", program_counter);
+                if let Some(instruction) = prototype.code.get(*program_counter) {
+                    debug.field("opcode", &instruction.opcode_name());
+                }
+                debug.field("prototype", prototype)
+                    .finish()
+            }
             TraceEntry::RUST(func) => {
-                f.debug_tuple("TraceElement::RUST").field(&(func as *const NativeFunction)).finish()
-            },
+                f.debug_tuple("TraceElement::RUST").field(&func.name()).field(&(func as *const NativeFunction)).finish()
+            }
         }
     }
 }
@@ -74,13 +78,29 @@ impl TracedError {
     }
 }
 
-pub trait Traceable {
-    fn trace(self, from: NativeFunction) -> Result<Varargs, TracedError>;
+pub enum TraceableError {
+    TRACED(TracedError),
+    LUA(LuaError)
 }
 
-impl<T: Into<LuaError>> Traceable for Result<Varargs, T> {
-    fn trace(self, from: NativeFunction) -> Result<Varargs, TracedError> {
-        self.map_err(|e| TracedError::from_rust(e.into(), from))
+impl TraceableError {
+    pub fn trace(self, caller: NativeFunction) -> TracedError {
+        match self {
+            TraceableError::TRACED(error) => error.push_rust(caller),
+            TraceableError::LUA(error) => TracedError::from_rust(error, caller)
+        }
+    }
+}
+
+impl<T: Into<LuaError>> From<T> for TraceableError {
+    fn from(e: T) -> Self {
+        TraceableError::LUA(e.into())
+    }
+}
+
+impl From<TracedError> for TraceableError {
+    fn from(e: TracedError) -> Self {
+        TraceableError::TRACED(e)
     }
 }
 
@@ -91,7 +111,7 @@ pub enum LuaError {
     CompileError(CompileError),
     DecodeError(DecodeError),
     UserError { message: Option<LuaValue>, level: LUA_INT },
-    InterpreterBug { message: &'static str }
+    InterpreterBug { message: &'static str },
 }
 
 impl LuaError {
@@ -130,7 +150,7 @@ impl From<DecodeError> for LuaError {
 
 #[derive(Debug)]
 pub enum ArgumentError {
-    InvalidArgument { expected: String, found: &'static str, index: usize },    // TODO: Replace `expected` with a &str once concatenation of str literals and str constants is possible.
+    InvalidArgument { expected: String, found: &'static str, index: usize }, // TODO: Replace `expected` with a &str once concatenation of str literals and str constants is possible.
     CannotCoerce { expected: &'static str, found: &'static str },
     InvalidType { expected: &'static str, found: &'static str },
     TableKeyIsNaN,
@@ -140,7 +160,7 @@ pub enum ArgumentError {
     IncomparableTypes { lhs_type: &'static str, rhs_type: &'static str },
     InvalidPatternFeature { message: &'static str },
     InvalidPatternOrFormat { message: String },
-    InvalidTableContent { expected: &'static str, found: LuaValue, key: LuaValue }
+    InvalidTableContent { expected: &'static str, found: LuaValue, key: LuaValue },
 }
 
 impl Display for ArgumentError {
@@ -187,7 +207,7 @@ impl Display for ByteCodeError {
             ByteCodeError::PrototypeIndexOutOfBounds { prototype_index, prototype_len } => write!(f, "Prototype index out of bounds at index {} with protoype count {}", prototype_index, prototype_len),
             ByteCodeError::UnknownOpcode { opcode } => write!(f, "Unknown opcode: {:X}", opcode),
             ByteCodeError::AttemptToExecuteExtraArg => write!(f, "Attempt to execute ExtraArg opcode"),
-            ByteCodeError::ExpectedExtraArg { found } => write!(f, "Expected ExtraArg, found opcode {:X}", found),
+            ByteCodeError::ExpectedExtraArg { found } => write!(f, "Expected ExtraArg, found opcode {:X}", found.as_bytes()),
         }
     }
 }
@@ -197,7 +217,7 @@ pub enum DecodeError {
     IO(io::Error),
     InvalidSignature { found: [u8; constants::LUA_SIGNATURE.len()], expected: &'static [u8; constants::LUA_SIGNATURE.len()] },
     ConversionDataCorrupt { found: [u8; constants::LUA_CONV_DATA.len()], expected: &'static [u8; constants::LUA_CONV_DATA.len()] },
-    IncompatibleSystemParam([u8; constants::LUA_SYSTEM_PARAMETER.len()]),
+    IncompatibleSystemParam { found: [u8; constants::LUA_SYSTEM_PARAMETER.len()], expected: &'static [u8; constants::LUA_SYSTEM_PARAMETER.len()] },
     CorruptCheckInt(LUA_INT),
     CorruptCheckFloat(LUA_FLOAT),
     VectorSizeOverflow(usize, usize),
@@ -206,6 +226,7 @@ pub enum DecodeError {
     NonBinaryBooleanByte(u8),
     InvalidVersion(u8),
     InvalidFormat(u8),
+    IntegerOverflow(usize, u8),
 }
 
 impl From<io::Error> for DecodeError {
@@ -224,7 +245,7 @@ impl Display for DecodeError {
 pub enum CompileError {
     ExternalCommandFailed(io::Error),
     CompileFailed(String),
-    DecodeError(DecodeError)
+    DecodeError(DecodeError),
 }
 
 impl Display for CompileError {

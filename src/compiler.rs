@@ -25,9 +25,7 @@ impl LuaCompiler for LuaC {
         if let Some(stdin) = &mut process.stdin {
             match io::copy(reader, stdin) {
                 Ok(_) => {}
-                Err(_err) => {
-                    // Maybe log this somewhere? In practice the output should provide more detail
-                },
+                Err(_err) => {} // Maybe log this somewhere? In practice the process output should provide more detail
             };
         }
 
@@ -39,7 +37,7 @@ impl LuaCompiler for LuaC {
                 Err(CompileError::CompileFailed(format!("LuaC compilation failed with error code {} and message:\n{}", code, message)))
             } else {
                 Err(CompileError::CompileFailed(format!("LuaC compilation failed with error message:\n{}", message)))
-            }
+            };
         }
 
         let mut script_buffer: Vec<u8>;

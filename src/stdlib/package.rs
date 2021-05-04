@@ -1,17 +1,20 @@
 use crate::vm::ExecutionState;
-use crate::error::{TracedError, ArgumentError, Traceable, LuaError};
+use crate::error::{TracedError, LuaError, TraceableError};
 use crate::types::value::LuaValue;
 use crate::types::varargs::Varargs;
 use crate::types::value::table::LuaTable;
 use crate::types::value::function::LuaFunction;
+use crate::types::value::function::NativeFunction;
 use crate::types::parameters::LuaParameters;
 use crate::types::value::string::LuaString;
 use std::ffi::OsString;
 use std::fs::File;
-use crate::vm;
+use crate::lua_func;
+use crate::trace_error;
+use crate::types::CoerceFrom;
 
 pub fn require(execstate: &mut ExecutionState, params: &[LuaValue]) -> Result<Varargs, TracedError> {
-    let result: Result<Varargs, LuaError> = try {
+    let result: Result<Varargs, TraceableError> = try {
         let module_name = params.try_coerce::<LuaString>(0)?;
         // If a builtin library, try loading those from the execstate environment
         // TODO: Maybe replace with a more generic execstate.modules.get() call, rather than matching the name?
@@ -35,35 +38,29 @@ pub fn require(execstate: &mut ExecutionState, params: &[LuaValue]) -> Result<Va
                 return Ok(Varargs::from(module));
             }
 
-            let preload_table = package_module.raw_get_into("preload")
-                .unwrap_or(LuaValue::NIL)
-                .not_nil();
+            let searchers = package_module.raw_get_into("searchers")
+                .unwrap_or(LuaValue::NIL);
 
-            if let Some(preload) = preload_table {    // If preload table is nil, no preloading attempt is made, otherwise, coerce to a table.
-                let loader = preload.index_with_metatable(&LuaValue::from(module_name.clone()), &execstate.metatables)?;
-                let load_result = match vm::helper::do_call_from_rust(require, loader, execstate, &[LuaValue::from(module_name.clone())]) {
-                    Ok(r) => r,
-                    Err(err) => return Err(err),
-                };
-                match load_result.into_first() {
-                    LuaValue::NIL => {
-                        loaded_table.write_index_with_metatable(LuaValue::from(module_name), LuaValue::from(true), &execstate.metatables)?;
-                        Varargs::from(true)
-                    },
-                    module @ _ => {
-                        loaded_table.write_index_with_metatable(LuaValue::from(module_name), module.clone(), &execstate.metatables)?;
-                        Varargs::from(module)
-                    }
+
+            for (_, search_function) in LuaTable::coerce_from(&searchers)?.iter() {
+                debug_assert!(params.len() >= 1);   // Coercion to module_name string should fail if there are no arguments provided
+                let result = crate::vm::helper::do_call_from_rust(lua_func!(require), search_function, execstate, &params[0..=0])?;
+
+                let [loader, data] = result.into_array::<2>();
+
+                if let LuaValue::FUNCTION(_) = &loader {
+                    crate::vm::helper::do_call_from_rust(lua_func!(require), loader, execstate, &[data]);
+                } else {
+
                 }
-            } else {
-                // TODO: Implement other loaders
-                Err(LuaError::user_string(format!("Unknown module: {}", module_name)))?
             }
+
+            Err(LuaError::user_str("No valid searcher for module!"))?
         } else {
             Err(LuaError::user_str("Package module was unloaded!"))?
         }
     };
-    result.trace(require)
+    result.map_err(|e| e.trace(lua_func!(require)))
 }
 
 pub const CONFIG: &str = {
@@ -92,7 +89,11 @@ pub const PATH: &str = {
 
 pub const PRELOAD: fn() -> LuaTable = LuaTable::empty;      // TODO: Implement
 
-pub const SEARCHERS: fn() -> LuaTable = LuaTable::empty;    // TODO: Implement
+pub const SEARCHERS: fn() -> LuaTable = || {
+    let table = LuaTable::empty();
+
+    table
+};
 
 fn replace_bytes(search_text: &[u8], pattern: &[u8], replacement: &[u8]) -> Vec<u8> {
     if pattern.len() > 0 {
@@ -124,7 +125,7 @@ fn replace_bytes(search_text: &[u8], pattern: &[u8], replacement: &[u8]) -> Vec<
 // TODO: This might look for empty-string paths? Needs a bugfix
 // This function is quite ugly and could use some cleanup; A lot of vectors are created and likely not needed
 pub fn searchpath(_execstate: &mut ExecutionState, params: &[LuaValue]) -> Result<Varargs, TracedError> {
-    let result: Result<Varargs, ArgumentError> = try {
+    let result: Result<Varargs, TraceableError> = try {
         let name = params.try_coerce::<LuaString>(0)?;
         let paths = params.try_coerce::<LuaString>(1)?;
 
@@ -168,7 +169,7 @@ pub fn searchpath(_execstate: &mut ExecutionState, params: &[LuaValue]) -> Resul
 
         Varargs::from((LuaValue::NIL, LuaString::from(error.into_boxed_slice())))
     };
-    result.trace(searchpath)
+    trace_error!(result, searchpath)
 }
 
 pub fn insert_package_lib(execstate: &mut ExecutionState) {
@@ -183,7 +184,7 @@ pub fn insert_package_lib(execstate: &mut ExecutionState) {
     table.set("searchers", SEARCHERS()).unwrap();
     set_table!(table, searchpath);
 
-    execstate.global_env.raw_set("require", LuaFunction::RUST_FUNCTION(require)).expect("Raw set with string key should not error!");
+    execstate.global_env.raw_set("require", LuaFunction::RUST_FUNCTION(lua_func!(require))).expect("Raw set with string key should not error!");
     execstate.global_env.raw_set("package", table.clone()).expect("Raw set with string key should not error!");
     execstate.modules.insert("package", table);
 }

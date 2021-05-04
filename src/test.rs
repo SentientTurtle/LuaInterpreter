@@ -38,7 +38,7 @@ fn do_test(file_name: &str) {
 
     eprintln!("Decoding script: {:?}", file_name);
     let proto = bytecode::loader::load_chunk(&mut &script_buffer[..]).unwrap();
-    println!("{}", proto);
+    // println!("{}", proto);
     let mut closure = ClosureImpl::from_proto_with_env(proto, LuaValue::from(execstate.global_env.clone()));
     eprintln!("Running script: {:?}", file_name);
     match vm::execute_closure(&mut closure, &mut execstate, &[]) {
@@ -51,6 +51,7 @@ fn do_test(file_name: &str) {
 }
 
 // TODO: Add compile-from-file to compiler module; Current implementation removes filename information
+#[allow(unused)]
 fn do_test_with_compiler_module(file_name: &str) {
     eprintln!("Loading script: {:?}", file_name);
     let file = match File::open(String::from("./lua-tests/") + file_name + ".lua") {

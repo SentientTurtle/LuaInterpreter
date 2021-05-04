@@ -1,4 +1,4 @@
-use crate::constants::types::{LUA_INT, LUA_FLOAT};
+use crate::constants::types::{LUA_FLOAT, LUA_INT};
 use crate::error::ArgumentError;
 use crate::types::value::LuaValue;
 use crate::types::value::number::LuaNumber;
@@ -24,7 +24,7 @@ pub trait LuaType: 'static {
 }
 
 impl LuaType for bool {
-    const CONTAINER_NAME: &'static str = "bool";
+    const CONTAINER_NAME: &'static str = "boolean";
 }
 
 impl LuaType for LUA_INT {
@@ -105,4 +105,3 @@ impl<T: Into<LuaValue> + Clone> CoerceFrom<T> for Nil {
         }
     }
 }
-

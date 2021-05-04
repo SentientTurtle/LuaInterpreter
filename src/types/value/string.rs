@@ -57,7 +57,7 @@ impl From<&[u8]> for LuaString {
 impl From<Box<[u8]>> for LuaString {
     fn from(boxed: Box<[u8]>) -> Self {
         match std::str::from_utf8(&boxed) {
-            Ok(string) => unsafe {
+            Ok(_string) => unsafe {
                 LuaString::UNICODE(Rc::from(std::str::from_boxed_utf8_unchecked(boxed)))
             },
             Err(_) => {
@@ -110,7 +110,7 @@ impl LuaString {
         match self {
             LuaString::UNICODE(unicode) => Ok(unicode),
             LuaString::BINARY(bytes) => {
-                debug_assert!(std::str::from_utf8(bytes).is_err());
+                debug_assert!(std::str::from_utf8(bytes).is_err()); // TODO: Clean up debug assertions?
                 Err(ArgumentError::InvalidType { expected: "unicode string", found: "binary string" })
             }
         }

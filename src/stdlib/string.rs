@@ -1,6 +1,8 @@
 use crate::vm;
+use crate::lua_func;
+use crate::trace_error;
 use crate::vm::ExecutionState;
-use crate::error::{TracedError, ArgumentError, Traceable};
+use crate::error::{TracedError, ArgumentError, TraceableError};
 use crate::stdlib::string::pattern::compile_pattern;
 use nom::{FindSubstring, AsBytes, IResult};
 use crate::util::Union3;
@@ -9,12 +11,11 @@ use regex::bytes::Captures;
 use crate::types::value::LuaValue;
 use crate::types::value::string::LuaString;
 use crate::types::varargs::Varargs;
-use crate::types::value::function::{LuaFunction, LuaClosure};
+use crate::types::value::function::{LuaFunction, LuaClosure, NativeFunction};
 use crate::types::value::table::LuaTable;
 use crate::types::parameters::LuaParameters;
 use crate::types::{LuaType, CoerceFrom};
 use crate::constants::types::LUA_INT;
-use nom::lib::std::fmt::{Debug, Formatter};
 use std::fmt;
 use nom::multi::{many0, many1};
 use nom::branch::alt;
@@ -22,6 +23,7 @@ use nom::combinator::{map, opt};
 use nom::character::complete::none_of;
 use nom::bytes::complete::{tag, is_a};
 use nom::sequence::tuple;
+use std::fmt::{Debug, Formatter};
 
 fn relative_index_to_absolute(index: i64, string: &LuaString) -> usize {
     if index >= 0 {
@@ -32,7 +34,7 @@ fn relative_index_to_absolute(index: i64, string: &LuaString) -> usize {
 }
 
 pub fn byte(_execstate: &mut ExecutionState, params: &[LuaValue]) -> Result<Varargs, TracedError> {
-    let result: Result<Varargs, ArgumentError> = try {
+    let result: Result<Varargs, TraceableError> = try {
         let string = params.try_coerce::<LuaString>(0)?;
         let start = if let Some(LuaValue::NUMBER(n)) = params.get(1) {
             n.as_int()? - 1
@@ -57,7 +59,7 @@ pub fn byte(_execstate: &mut ExecutionState, params: &[LuaValue]) -> Result<Vara
             Varargs::empty()
         }
     };
-    result.trace(byte)
+    trace_error!(result, byte)
 }
 
 pub fn char(_execstate: &mut ExecutionState, params: &[LuaValue]) -> Result<Varargs, TracedError> {
@@ -67,7 +69,7 @@ pub fn char(_execstate: &mut ExecutionState, params: &[LuaValue]) -> Result<Vara
             LuaValue::NUMBER(num) if (0..255_i64).contains(&num.as_int().unwrap_or(-1)) => { // Check that "num" is an integer between 0 and 255
                 vec.push(num.as_int().unwrap() as u8);
             }
-            _ => return Err(TracedError::from_rust(ArgumentError::InvalidArgument { expected: "byte (0-254)".to_string(), found: params.get_value_or_nil(index).type_name(), index }, char))
+            _ => return Err(TracedError::from_rust(ArgumentError::InvalidArgument { expected: "byte (0-254)".to_string(), found: params.get_value_or_nil(index).type_name(), index }, lua_func!(char)))
         }
     }
 
@@ -75,17 +77,17 @@ pub fn char(_execstate: &mut ExecutionState, params: &[LuaValue]) -> Result<Vara
 }
 
 pub fn dump(_execstate: &mut ExecutionState, params: &[LuaValue]) -> Result<Varargs, TracedError> { // TODO: Implement strip option
-    let result: Result<Varargs, ArgumentError> = try {
+    let result: Result<Varargs, TraceableError> = try {
         let closure = params.try_coerce::<LuaClosure>(0)?;
         let mut bytes = Vec::new();
         crate::bytecode::dumper::dump_chunk(&closure.borrow().proto, &mut bytes);
         Varargs::from(LuaString::from(bytes.into_boxed_slice()))
     };
-    result.trace(dump)
+    trace_error!(result, dump)
 }
 
 pub fn find(_execstate: &mut ExecutionState, params: &[LuaValue]) -> Result<Varargs, TracedError> {
-    let result: Result<Varargs, ArgumentError> = try {
+    let result: Result<Varargs, TraceableError> = try {
         let string = params.try_coerce::<LuaString>(0)?;
         let pattern = params.try_coerce::<LuaString>(1)?;
         let rel_index = params.get(2)
@@ -128,7 +130,7 @@ pub fn find(_execstate: &mut ExecutionState, params: &[LuaValue]) -> Result<Vara
             }
         }
     };
-    result.trace(find)
+    trace_error!(result, find)
 }
 
 #[derive(Debug)]
@@ -236,7 +238,7 @@ fn parse_format(i: &[u8]) -> IResult<&[u8], StringFormat> {
 
 // TODO: This function is a mess and needs to be fixed
 pub fn format(_execstate: &mut ExecutionState, params: &[LuaValue]) -> Result<Varargs, TracedError> {   // TODO: Extract formatting to the utility module
-    let result: Result<Varargs, ArgumentError> = try {
+    let result: Result<Varargs, TraceableError> = try {
         let format_string = params.try_coerce::<LuaString>(0)?;
         match parse_format(format_string.as_bytes()) {
             Ok((_, string_format)) => {
@@ -338,11 +340,11 @@ pub fn format(_execstate: &mut ExecutionState, params: &[LuaValue]) -> Result<Va
                 Varargs::from(LuaString::from(results.into_boxed_slice()))
             }
             Err(err) => {
-                return Err(TracedError::from_rust(ArgumentError::InvalidPatternOrFormat { message: format!("{}", err) }, format));
+                return Err(TracedError::from_rust(ArgumentError::InvalidPatternOrFormat { message: format!("{}", err) }, lua_func!(format)));
             }
         }
     };
-    result.trace(format)
+    trace_error!(result, format)
 }
 
 pub fn gmatch(_execstate: &mut ExecutionState, _params: &[LuaValue]) -> Result<Varargs, TracedError> {
@@ -378,7 +380,7 @@ fn parse_repl(input: &[u8]) -> Result<Vec<ReplacementElement>, ArgumentError> {
 }
 
 pub fn gsub(execstate: &mut ExecutionState, params: &[LuaValue]) -> Result<Varargs, TracedError> {
-    let result: Result<Varargs, ArgumentError> = try {
+    let result: Result<Varargs, TraceableError> = try {
         let string = params.try_coerce::<LuaString>(0)?;
         let pattern = params.try_coerce::<LuaString>(1)?;
 
@@ -389,13 +391,13 @@ pub fn gsub(execstate: &mut ExecutionState, params: &[LuaValue]) -> Result<Varar
                         Union3::One(replacement)
                     }
                     Err(err) => {
-                        return Err(TracedError::from_rust(err, gsub));
+                        return Err(TracedError::from_rust(err, lua_func!(gsub)));
                     }
                 }
             }
             Some(LuaValue::TABLE(t)) => Union3::Two(t),
             Some(LuaValue::FUNCTION(f)) => Union3::Three(f),
-            _ => return Err(TracedError::from_rust(ArgumentError::InvalidArgument { expected: "string, table or function".to_string(), found: params.get_value_or_nil(2).type_name(), index: 2 }, gsub))
+            _ => return Err(TracedError::from_rust(ArgumentError::InvalidArgument { expected: "string, table or function".to_string(), found: params.get_value_or_nil(2).type_name(), index: 2 }, lua_func!(gsub)))
         };
         // TODO Check 'as usize' conversion for negative numbers elsewhere; it's a mem::transmute!
         let n = params.try_coerce::<LUA_INT>(3).ok().map(|i| i.max(0) as usize);
@@ -459,7 +461,7 @@ pub fn gsub(execstate: &mut ExecutionState, params: &[LuaValue]) -> Result<Varar
                             } else {
                                 &arguments[..]
                             };
-                            match vm::helper::do_call_from_rust(gsub, LuaValue::from((*function).clone()), execstate, args) {
+                            match vm::helper::do_call_from_rust(lua_func!(gsub), LuaValue::from((*function).clone()), execstate, args) {
                                 Ok(result) => {
                                     if let Some(s) = result.opt(0).map(LuaString::coerce_from).and_then(Result::ok) {
                                         s
@@ -482,15 +484,15 @@ pub fn gsub(execstate: &mut ExecutionState, params: &[LuaValue]) -> Result<Varar
 
         Varargs::from((result.as_bytes(), substitution_count))
     };
-    result.trace(gsub)
+    trace_error!(result, gsub)
 }
 
 pub fn len(_execstate: &mut ExecutionState, params: &[LuaValue]) -> Result<Varargs, TracedError> {
-    let result: Result<Varargs, ArgumentError> = try {
+    let result: Result<Varargs, TraceableError> = try {
         let string = params.try_coerce::<LuaString>(0)?;
         Varargs::from(string.len())
     };
-    result.trace(len)
+    trace_error!(result, len)
 }
 
 pub fn lower(_execstate: &mut ExecutionState, _params: &[LuaValue]) -> Result<Varargs, TracedError> {
@@ -502,21 +504,21 @@ pub fn string_match(_execstate: &mut ExecutionState, _params: &[LuaValue]) -> Re
 }
 
 pub fn pack(_execstate: &mut ExecutionState, params: &[LuaValue]) -> Result<Varargs, TracedError> {
-    let result: Result<Varargs, ArgumentError> = try {
+    let result: Result<Varargs, TraceableError> = try {
         let _format_string = params.try_coerce::<LuaString>(0)?;
         debug_assert!(params.len() > 0);    // We can assume this as the above fails with length 0
         let _arguments = &params[1..];
 
         unimplemented!()
     };
-    result.trace(format)
+    trace_error!(result, format)
 }
 
 pub fn packsize(_execstate: &mut ExecutionState, params: &[LuaValue]) -> Result<Varargs, TracedError> {
     use std::mem;
     use crate::constants::types::*;
 
-    let result: Result<Varargs, ArgumentError> = try {
+    let result: Result<Varargs, TraceableError> = try {
         let format_string = params.try_coerce::<LuaString>(0)?;
         let mut size = 0usize;  // TODO: perhaps check overflows?
         for byte in format_string.as_bytes() {
@@ -528,11 +530,11 @@ pub fn packsize(_execstate: &mut ExecutionState, params: &[LuaValue]) -> Result<
         }
         Varargs::from(size)
     };
-    result.trace(format)
+    trace_error!(result, format)
 }
 
 pub fn rep(_execstate: &mut ExecutionState, params: &[LuaValue]) -> Result<Varargs, TracedError> {
-    let result: Result<Varargs, ArgumentError> = try {
+    let result: Result<Varargs, TraceableError> = try {
         let string = params.try_coerce::<LuaString>(0)?;
         let repetitions = params.try_coerce::<LUA_INT>(1)?;
         let separator = params.try_coerce::<LuaString>(2).ok();
@@ -567,7 +569,7 @@ pub fn rep(_execstate: &mut ExecutionState, params: &[LuaValue]) -> Result<Varar
             Varargs::from(LuaString::from(""))
         }
     };
-    result.trace(rep)
+    trace_error!(result, rep)
 }
 
 pub fn reverse(_execstate: &mut ExecutionState, _params: &[LuaValue]) -> Result<Varargs, TracedError> {

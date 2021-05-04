@@ -41,7 +41,7 @@ fn write_floating(val: LUA_FLOAT, dest: &mut Vec<u8>) {
 }
 
 fn write_instruction(instruction: &LUA_INSTRUCTION, dest: &mut Vec<u8>) {
-    dest.extend_from_slice(&LUA_INSTRUCTION::to_le_bytes(*instruction))
+    dest.extend_from_slice(&u32::to_le_bytes(instruction.as_bytes()))
 }
 
 fn write_string(string: &Option<LuaString>, dest: &mut Vec<u8>) {
@@ -65,10 +65,10 @@ fn write_constant(value: &LuaValue, dest: &mut Vec<u8>) {
         match value {
             LuaValue::NIL => constants::typetag::TNIL,
             LuaValue::BOOLEAN(_) => constants::typetag::TBOOLEAN,
-            LuaValue::NUMBER(LuaNumber::INT(_)) => constants::typetag::TINTEGER,
-            LuaValue::NUMBER(LuaNumber::FLOAT(_)) => constants::typetag::TNUMBER,
-            LuaValue::STRING(s) if s.len() < 255 => constants::typetag::TSHORTSTRING,
-            LuaValue::STRING(_) => constants::typetag::TLONGSTRING,
+            LuaValue::NUMBER(LuaNumber::INT(_)) => constants::typetag::VINTEGER,
+            LuaValue::NUMBER(LuaNumber::FLOAT(_)) => constants::typetag::VFLOAT,
+            LuaValue::STRING(s) if s.len() < 255 => constants::typetag::VSHORTSTRING,
+            LuaValue::STRING(_) => constants::typetag::VLONGSTRING,
             LuaValue::USERDATA(_) => constants::typetag::TUSERDATA,
             LuaValue::FUNCTION(_) => constants::typetag::TFUNCTION,
             LuaValue::THREAD(_) => constants::typetag::TTHREAD,
@@ -113,6 +113,7 @@ fn write_function(proto: &Rc<Prototype>, dest: &mut Vec<u8>) {
         upvalues,
         functions,
         lineinfo,
+        abslineinfo,
         locvars,
         upvaluenames
     } = &**proto;
@@ -131,7 +132,12 @@ fn write_function(proto: &Rc<Prototype>, dest: &mut Vec<u8>) {
     write_int(&(functions.len() as i32), dest);
     write_vec(functions, write_function, dest);
     write_int(&(lineinfo.len() as i32), dest);
-    write_vec(lineinfo, write_int, dest);
+    write_vec(lineinfo, |value, dest_lambda| write_byte(*value as u8, dest_lambda), dest);
+    write_int(&(abslineinfo.len() as i32), dest);
+    write_vec(abslineinfo, |(startpc, endpc), dest_lambda| {
+        write_int(startpc, dest_lambda);
+        write_int(endpc, dest_lambda);
+    }, dest);
     write_int(&(locvars.len() as i32), dest);
     write_vec(locvars, write_locvar, dest);
     write_int(&(upvaluenames.len() as i32), dest);

@@ -6,7 +6,7 @@ macro_rules! set_table {
     };
 
     ($table:ident, $name:expr, $func:ident) => {
-        $table.raw_set($name, LuaFunction::RUST_FUNCTION($func)).unwrap();
+        $table.raw_set($name, LuaFunction::RUST_FUNCTION(lua_func!($func))).unwrap();
     };
 }
 

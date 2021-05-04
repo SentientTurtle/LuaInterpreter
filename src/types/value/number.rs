@@ -10,7 +10,8 @@ use crate::types::value::LuaValue;
 
 #[derive(Copy, Clone, Debug)]
 pub enum LuaNumber {
-    INT(LUA_INT),   // TODO: Make wrapping
+    INT(LUA_INT),
+    // TODO: Make wrapping
     FLOAT(LUA_FLOAT),
 }
 
@@ -65,7 +66,7 @@ impl LuaType for LuaNumber {
     const CONTAINER_NAME: &'static str = "number";
 }
 
-impl<T: Into<LuaValue> + Clone> CoerceFrom<T> for LuaNumber {
+impl<T: Into<LuaValue> + Clone> CoerceFrom<T> for LuaNumber {   // TODO: Metamethod
     fn coerce(value: &T) -> Option<Self> {
         match value.clone().into() {
             LuaValue::NUMBER(number) => Some(number.clone()),
@@ -84,12 +85,16 @@ impl<T: Into<LuaValue> + Clone> CoerceFrom<T> for LuaNumber {
                         } else {
                             utf8
                         };
-                        let utf8 = utf8.strip_prefix("0x").unwrap_or(utf8);
-                        if let Ok(unsigned) = LUA_INT_UNSIGNED::from_str_radix(utf8, 16) {
-                            if negate {
-                                Some(LuaNumber::from(-(unsigned as i64)))
+                        let prefixed = utf8.strip_prefix("0x");
+                        if let Some(utf8) = prefixed {
+                            if let Ok(unsigned) = LUA_INT_UNSIGNED::from_str_radix(utf8, 16) {
+                                if negate {
+                                    Some(LuaNumber::from(-(unsigned as i64)))
+                                } else {
+                                    Some(LuaNumber::from(unsigned as i64))
+                                }
                             } else {
-                                Some(LuaNumber::from(unsigned as i64))
+                                None
                             }
                         } else {
                             None
@@ -194,6 +199,7 @@ impl Shl for LuaNumber {
         }
     }
 }
+
 // delegate_math_to_primitive!(Shr, shr, uintonly: >>);
 impl Shr for LuaNumber {
     type Output = Result<LuaNumber, ArgumentError>;
@@ -235,15 +241,15 @@ impl PartialEq for LuaNumber {
                         } else {
                             false
                         }
-                    },
+                    }
                 }
-            },
+            }
             LuaNumber::FLOAT(lhs) => {
                 match other {
                     LuaNumber::INT(rhs) => lhs.eq(&(*rhs as LUA_FLOAT)),
                     LuaNumber::FLOAT(rhs) => lhs.eq(rhs),
                 }
-            },
+            }
         }
     }
 }
