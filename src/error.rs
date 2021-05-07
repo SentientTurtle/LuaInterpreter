@@ -9,15 +9,17 @@ use std::io::Error;
 use crate::constants;
 
 pub enum TraceEntry {
-    LUA(usize, Rc<Prototype>),
-    RUST(NativeFunction),
+    Lua(usize, Rc<Prototype>),
+    Rust(NativeFunction),
+    RustClosure(&'static str),
+    TailCall(usize)
 }
 
 impl Debug for TraceEntry {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
-            TraceEntry::LUA(program_counter, prototype) => {
-                let mut debug = f.debug_struct("TraceElement::LUA");
+            TraceEntry::Lua(program_counter, prototype) => {
+                let mut debug = f.debug_struct("TraceElement::Lua");
                 if let Some(line) = prototype.get_line(*program_counter) {
                     debug.field("line", &line);
                 }
@@ -28,9 +30,9 @@ impl Debug for TraceEntry {
                 debug.field("prototype", prototype)
                     .finish()
             }
-            TraceEntry::RUST(func) => {
-                f.debug_tuple("TraceElement::RUST").field(&func.name()).field(&(func as *const NativeFunction)).finish()
-            }
+            TraceEntry::Rust(func) => f.debug_tuple("TraceElement::Rust").field(&func.name()).field(&(func as *const NativeFunction)).finish(),
+            TraceEntry::RustClosure(name) => f.debug_tuple("TraceElement::RustClosure").field(name).finish(),
+            TraceEntry::TailCall(amount) => f.debug_tuple("TraceElement::TailCall").field(amount).finish(),
         }
     }
 }
@@ -40,29 +42,55 @@ pub struct TracedError {
     cause: LuaError,
     stacktrace: Vec<TraceEntry>,
 }
-
+// TODO: Note on documentation that program_counters use 0-based indexing
 impl TracedError {
     pub fn from_rust<T: Into<LuaError>>(cause: T, func: NativeFunction) -> TracedError {
         TracedError {
             cause: cause.into(),
-            stacktrace: vec![TraceEntry::RUST(func)],
+            stacktrace: vec![TraceEntry::Rust(func)],
+        }
+    }
+    pub fn from_rust_closure<T: Into<LuaError>>(cause: T, name: &'static str) -> TracedError {
+        TracedError {
+            cause: cause.into(),
+            stacktrace: vec![TraceEntry::RustClosure(name)],
         }
     }
 
     pub fn from_lua<T: Into<LuaError>>(cause: T, program_counter: usize, prototype: Rc<Prototype>) -> TracedError {
         TracedError {
             cause: cause.into(),
-            stacktrace: vec![TraceEntry::LUA(program_counter, prototype)],
+            stacktrace: vec![TraceEntry::Lua(program_counter, prototype)],
+        }
+    }
+
+    pub fn from_tailcall<T: Into<LuaError>>(cause: T) -> TracedError {
+        TracedError {
+            cause: cause.into(),
+            stacktrace: vec![TraceEntry::TailCall(1)]
         }
     }
 
     pub fn push_rust(mut self, func: NativeFunction) -> TracedError {
-        self.stacktrace.push(TraceEntry::RUST(func));
+        self.stacktrace.push(TraceEntry::Rust(func));
+        self
+    }
+
+    pub fn push_rust_closure(mut self, name: &'static str) -> TracedError {
+        self.stacktrace.push(TraceEntry::RustClosure(name));
         self
     }
 
     pub fn push_lua(mut self, program_counter: usize, prototype: Rc<Prototype>) -> TracedError {
-        self.stacktrace.push(TraceEntry::LUA(program_counter, prototype));
+        self.stacktrace.push(TraceEntry::Lua(program_counter, prototype));
+        self
+    }
+
+    pub fn push_tailcall(mut self) -> TracedError {
+        match self.stacktrace.last_mut() {
+            Some(TraceEntry::TailCall(count)) => *count = *count + 1,
+            Some(_) | None => self.stacktrace.push(TraceEntry::TailCall(1)),
+        }
         self
     }
 
@@ -84,10 +112,44 @@ pub enum TraceableError {
 }
 
 impl TraceableError {
-    pub fn trace(self, caller: NativeFunction) -> TracedError {
+    pub fn lua_into<T: Into<LuaError>>(error: T) -> TraceableError {
+        TraceableError::LUA(error.into())
+    }
+
+    pub fn trace_native(self, caller: NativeFunction) -> TracedError {
         match self {
             TraceableError::TRACED(error) => error.push_rust(caller),
             TraceableError::LUA(error) => TracedError::from_rust(error, caller)
+        }
+    }
+
+    pub fn trace_native_wrap(self, caller: NativeFunction) -> TraceableError {
+        TraceableError::TRACED(self.trace_native(caller))
+    }
+
+    pub fn trace_closure(self, caller: &'static str) -> TracedError {
+        match self {
+            TraceableError::TRACED(error) => error.push_rust_closure(caller),
+            TraceableError::LUA(error) => TracedError::from_rust_closure(error, caller)
+        }
+    }
+
+    pub fn trace_closure_wrap(self, caller: &'static str) -> TraceableError {
+        TraceableError::TRACED(self.trace_closure(caller))
+    }
+
+    pub fn trace_lua(self, program_counter: usize, prototype: Rc<Prototype>) -> TracedError {
+        match self {
+            TraceableError::TRACED(error) => error.push_lua(program_counter, prototype),
+            TraceableError::LUA(error) => TracedError::from_lua(error, program_counter, prototype)
+        }
+    }
+
+    // TODO: Implement
+    pub fn trace_tail_call(self) -> TracedError {
+        match self {
+            TraceableError::TRACED(error) => error.push_tailcall(),
+            TraceableError::LUA(error) => TracedError::from_tailcall(error)
         }
     }
 }

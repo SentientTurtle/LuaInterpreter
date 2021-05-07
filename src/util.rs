@@ -46,3 +46,18 @@ pub enum Union3<T, U, V> {
     Two(U),
     Three(V)
 }
+
+pub trait ResultFrom<T>: Sized {
+    fn ok_from<E>(val: T) -> Result<Self, E>;
+    fn err_from<O>(val: T) -> Result<O, Self>;
+}
+
+impl<T, U> ResultFrom<U> for T where T: From<U> {
+    fn ok_from<E>(val: U) -> Result<T, E> {
+        Result::Ok(T::from(val))
+    }
+
+    fn err_from<O>(val: U) -> Result<O, T> {
+        Result::Err(T::from(val))
+    }
+}

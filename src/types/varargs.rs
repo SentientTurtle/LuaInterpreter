@@ -9,6 +9,7 @@ impl Varargs {
         Varargs { inner: vec![LuaValue::NIL] }
     }
 
+    /// "Fail" value, currently nil but subject to future change.
     pub fn fail() -> Varargs {
         Varargs::nil()
     }

@@ -1,11 +1,10 @@
 use crate::vm;
 use crate::lua_func;
-use crate::trace_error;
 use crate::vm::ExecutionState;
-use crate::error::{TracedError, ArgumentError, TraceableError};
+use crate::error::{ArgumentError, TraceableError};
 use crate::stdlib::string::pattern::compile_pattern;
 use nom::{FindSubstring, AsBytes, IResult};
-use crate::util::Union3;
+use crate::util::{Union3, ResultFrom};
 use regex::bytes::Captures;
 
 use crate::types::value::LuaValue;
@@ -33,104 +32,95 @@ fn relative_index_to_absolute(index: i64, string: &LuaString) -> usize {
     }
 }
 
-pub fn byte(_execstate: &mut ExecutionState, params: &[LuaValue]) -> Result<Varargs, TracedError> {
-    let result: Result<Varargs, TraceableError> = try {
-        let string = params.try_coerce::<LuaString>(0)?;
-        let start = if let Some(LuaValue::NUMBER(n)) = params.get(1) {
-            n.as_int()? - 1
-        } else {
-            0
-        };
-        let end = if let Some(LuaValue::NUMBER(n)) = params.get(2) {
-            n.as_int()? - 1
-        } else {
-            start
-        };
-        // Translate negative indices to actual indices
-        let start: usize = relative_index_to_absolute(start, &string);
-        let end: usize = relative_index_to_absolute(end, &string);
-
-        if end >= start &&
-            start < string.len() &&
-            end < string.len() {
-            let return_vec: Vec<LuaValue> = string.as_bytes()[start..=end].iter().map(|b| LuaValue::from(*b as usize)).collect();
-            Varargs::from(return_vec)
-        } else {
-            Varargs::empty()
-        }
+pub fn byte(_execstate: &mut ExecutionState, params: &[LuaValue]) -> Result<Varargs, TraceableError> {
+    let string = params.try_coerce::<LuaString>(0)?;
+    let start = if let Some(LuaValue::NUMBER(n)) = params.get(1) {
+        n.as_int()? - 1
+    } else {
+        0
     };
-    trace_error!(result, byte)
+    let end = if let Some(LuaValue::NUMBER(n)) = params.get(2) {
+        n.as_int()? - 1
+    } else {
+        start
+    };
+    // Translate negative indices to actual indices
+    let start: usize = relative_index_to_absolute(start, &string);
+    let end: usize = relative_index_to_absolute(end, &string);
+
+    if end >= start &&
+        start < string.len() &&
+        end < string.len() {
+        let return_vec: Vec<LuaValue> = string.as_bytes()[start..=end].iter().map(|b| LuaValue::from(*b as usize)).collect();
+        Varargs::ok_from(return_vec)
+    } else {
+        Ok(Varargs::empty())
+    }
 }
 
-pub fn char(_execstate: &mut ExecutionState, params: &[LuaValue]) -> Result<Varargs, TracedError> {
+pub fn char(_execstate: &mut ExecutionState, params: &[LuaValue]) -> Result<Varargs, TraceableError> {
     let mut vec = Vec::new();
     for (index, param) in params.iter().enumerate() {
         match param {
             LuaValue::NUMBER(num) if (0..255_i64).contains(&num.as_int().unwrap_or(-1)) => { // Check that "num" is an integer between 0 and 255
                 vec.push(num.as_int().unwrap() as u8);
             }
-            _ => return Err(TracedError::from_rust(ArgumentError::InvalidArgument { expected: "byte (0-254)".to_string(), found: params.get_value_or_nil(index).type_name(), index }, lua_func!(char)))
+            _ => return Err(ArgumentError::InvalidArgument { expected: "byte (0-254)".to_string(), found: params.get_value_or_nil(index).type_name(), index })?
         }
     }
 
     Ok(Varargs::from(LuaString::from(vec.into_boxed_slice())))
 }
 
-pub fn dump(_execstate: &mut ExecutionState, params: &[LuaValue]) -> Result<Varargs, TracedError> { // TODO: Implement strip option
-    let result: Result<Varargs, TraceableError> = try {
-        let closure = params.try_coerce::<LuaClosure>(0)?;
-        let mut bytes = Vec::new();
-        crate::bytecode::dumper::dump_chunk(&closure.borrow().proto, &mut bytes);
-        Varargs::from(LuaString::from(bytes.into_boxed_slice()))
-    };
-    trace_error!(result, dump)
+pub fn dump(_execstate: &mut ExecutionState, params: &[LuaValue]) -> Result<Varargs, TraceableError> { // TODO: Implement strip option
+    let closure = params.try_coerce::<LuaClosure>(0)?;
+    let mut bytes = Vec::new();
+    crate::bytecode::dumper::dump_chunk(&closure.borrow().proto, &mut bytes);
+    Varargs::ok_from(LuaString::from(bytes.into_boxed_slice()))
 }
 
-pub fn find(_execstate: &mut ExecutionState, params: &[LuaValue]) -> Result<Varargs, TracedError> {
-    let result: Result<Varargs, TraceableError> = try {
-        let string = params.try_coerce::<LuaString>(0)?;
-        let pattern = params.try_coerce::<LuaString>(1)?;
-        let rel_index = params.get(2)
-            .map(|v| if let LuaValue::NUMBER(n) = v { n.as_int().unwrap_or(1) - 1 } else { 0 })
-            .unwrap_or(0);
-        let start_index = {
-            let index = relative_index_to_absolute(
-                rel_index,
-                &string,
-            );
-            if index < string.len() {
-                index
-            } else {
-                string.len().saturating_sub(1)  // prevent overflow
-            }
-        };
-
-        let plain_match = params.get(3).map(|v| if let LuaValue::BOOLEAN(b) = v { *b } else { false }).unwrap_or(false);
-        if !plain_match {
-            let regex = compile_pattern(pattern.as_bytes())?;
-            match regex.captures(&string.as_bytes()[start_index..]) {
-                Some(captures) => {
-                    let mut return_values = Vec::new();
-                    let m = captures.get(0).expect("Captures must always match whole group");
-                    return_values.push(LuaValue::from(m.start() + 1));
-                    return_values.push(LuaValue::from(m.end() + 1));
-                    for capture in captures.iter() {
-                        if let Some(m) = capture {
-                            return_values.push(LuaValue::from(m.as_bytes()))
-                        }
-                    }
-                    Varargs::from(return_values)
-                }
-                None => Varargs::nil()
-            }
+pub fn find(_execstate: &mut ExecutionState, params: &[LuaValue]) -> Result<Varargs, TraceableError> {
+    let string = params.try_coerce::<LuaString>(0)?;
+    let pattern = params.try_coerce::<LuaString>(1)?;
+    let rel_index = params.get(2)
+        .map(|v| if let LuaValue::NUMBER(n) = v { n.as_int().unwrap_or(1) - 1 } else { 0 })
+        .unwrap_or(0);
+    let start_index = {
+        let index = relative_index_to_absolute(
+            rel_index,
+            &string,
+        );
+        if index < string.len() {
+            index
         } else {
-            match string.as_bytes().find_substring(pattern.as_bytes()) {
-                Some(m) => Varargs::from((m + 1, m + pattern.len())),
-                None => Varargs::nil()
-            }
+            string.len().saturating_sub(1)  // prevent overflow
         }
     };
-    trace_error!(result, find)
+
+    let plain_match = params.get(3).map(|v| if let LuaValue::BOOLEAN(b) = v { *b } else { false }).unwrap_or(false);
+    if !plain_match {
+        let regex = compile_pattern(pattern.as_bytes())?;
+        match regex.captures(&string.as_bytes()[start_index..]) {
+            Some(captures) => {
+                let mut return_values = Vec::new();
+                let m = captures.get(0).expect("Captures must always match whole group");
+                return_values.push(LuaValue::from(m.start() + 1));
+                return_values.push(LuaValue::from(m.end() + 1));
+                for capture in captures.iter() {
+                    if let Some(m) = capture {
+                        return_values.push(LuaValue::from(m.as_bytes()))
+                    }
+                }
+                Varargs::ok_from(return_values)
+            }
+            None => Ok(Varargs::nil())
+        }
+    } else {
+        match string.as_bytes().find_substring(pattern.as_bytes()) {
+            Some(m) => Varargs::ok_from((m + 1, m + pattern.len())),
+            None => Ok(Varargs::nil())
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -237,117 +227,114 @@ fn parse_format(i: &[u8]) -> IResult<&[u8], StringFormat> {
 }
 
 // TODO: This function is a mess and needs to be fixed
-pub fn format(_execstate: &mut ExecutionState, params: &[LuaValue]) -> Result<Varargs, TracedError> {   // TODO: Extract formatting to the utility module
-    let result: Result<Varargs, TraceableError> = try {
-        let format_string = params.try_coerce::<LuaString>(0)?;
-        match parse_format(format_string.as_bytes()) {
-            Ok((_, string_format)) => {
-                let mut index = 1;
-                let mut results = Vec::new();
-                for element in string_format {
-                    match element {
-                        FormatElement::RawString(string) => results.extend_from_slice(&string[..]),
-                        FormatElement::Format { flags, width: width_options, precision: precision_option, specifier } => {
-                            match specifier as char {
-                                'd' | 'i' => {
-                                    let value = params.try_coerce::<LUA_INT>(index)?;
-                                    index += 1;
+pub fn format(_execstate: &mut ExecutionState, params: &[LuaValue]) -> Result<Varargs, TraceableError> {   // TODO: Extract formatting to the utility module
+    let format_string = params.try_coerce::<LuaString>(0)?;
+    match parse_format(format_string.as_bytes()) {
+        Ok((_, string_format)) => {
+            let mut index = 1;
+            let mut results = Vec::new();
+            for element in string_format {
+                match element {
+                    FormatElement::RawString(string) => results.extend_from_slice(&string[..]),
+                    FormatElement::Format { flags, width: width_options, precision: precision_option, specifier } => {
+                        match specifier as char {
+                            'd' | 'i' => {
+                                let value = params.try_coerce::<LUA_INT>(index)?;
+                                index += 1;
 
-                                    // Convert value to string without sign
-                                    let mut string = value.abs().to_string();
+                                // Convert value to string without sign
+                                let mut string = value.abs().to_string();
 
-                                    match (width_options, precision_option) {
-                                        (None, Some(precision)) => {
-                                            // Pad digits to [precision] with zeros
-                                            string = format!("{:0width$}", string, width = precision);
+                                match (width_options, precision_option) {
+                                    (None, Some(precision)) => {
+                                        // Pad digits to [precision] with zeros
+                                        string = format!("{:0width$}", string, width = precision);
+                                        if value < 0 {
+                                            string = format!("-{}", string);
+                                        } else if flags.force_sign {
+                                            string = format!("+{}", string);
+                                        }
+                                    }
+                                    (Some((width, pad_zeros)), None) => {
+                                        if flags.left_justify {     // Pads with space regardless of pad_zero flag
+                                            // Add sign
                                             if value < 0 {
                                                 string = format!("-{}", string);
                                             } else if flags.force_sign {
                                                 string = format!("+{}", string);
                                             }
-                                        }
-                                        (Some((width, pad_zeros)), None) => {
-                                            if flags.left_justify {     // Pads with space regardless of pad_zero flag
+                                            string = format!("{:<width$}", string, width = width);
+                                        } else {
+                                            if pad_zeros {
+                                                string = format!("{:0width$}", string, width = width.saturating_sub(0));
+                                                // Add sign
+                                                if value < 0 {
+                                                    string = format!("-{}", string);
+                                                } else if flags.force_sign {
+                                                    string = format!("+{}", string);
+                                                } else {
+                                                    string = format!(" {}", string);
+                                                }
+                                            } else {
                                                 // Add sign
                                                 if value < 0 {
                                                     string = format!("-{}", string);
                                                 } else if flags.force_sign {
                                                     string = format!("+{}", string);
                                                 }
-                                                string = format!("{:<width$}", string, width = width);
-                                            } else {
-                                                if pad_zeros {
-                                                    string = format!("{:0width$}", string, width = width.saturating_sub(0));
-                                                    // Add sign
-                                                    if value < 0 {
-                                                        string = format!("-{}", string);
-                                                    } else if flags.force_sign {
-                                                        string = format!("+{}", string);
-                                                    } else {
-                                                        string = format!(" {}", string);
-                                                    }
-                                                } else {
-                                                    // Add sign
-                                                    if value < 0 {
-                                                        string = format!("-{}", string);
-                                                    } else if flags.force_sign {
-                                                        string = format!("+{}", string);
-                                                    }
-                                                    string = format!("{:width$}", string, width = width.saturating_sub(0));
-                                                }
-                                            }
-                                        }
-                                        (Some((width, _)), Some(precision)) => {
-                                            string = format!("{:0width$}", string, width = precision);
-                                            if value < 0 {
-                                                string = format!("-{}", string);
-                                            } else if flags.force_sign {
-                                                string = format!("+{}", string);
-                                            }
-
-                                            if flags.left_justify {     // Pads with space regardless of pad_zero flag
-                                                string = format!("{:<width$}", string, width = width);
-                                            } else {
                                                 string = format!("{:width$}", string, width = width.saturating_sub(0));
                                             }
                                         }
-                                        (None, None) => {
-                                            if value < 0 {
-                                                string = format!("-{}", string);
-                                            } else if flags.force_sign {
-                                                string = format!("+{}", string);
-                                            }
+                                    }
+                                    (Some((width, _)), Some(precision)) => {
+                                        string = format!("{:0width$}", string, width = precision);
+                                        if value < 0 {
+                                            string = format!("-{}", string);
+                                        } else if flags.force_sign {
+                                            string = format!("+{}", string);
+                                        }
+
+                                        if flags.left_justify {     // Pads with space regardless of pad_zero flag
+                                            string = format!("{:<width$}", string, width = width);
+                                        } else {
+                                            string = format!("{:width$}", string, width = width.saturating_sub(0));
                                         }
                                     }
-                                    results.extend_from_slice(string.as_bytes())
+                                    (None, None) => {
+                                        if value < 0 {
+                                            string = format!("-{}", string);
+                                        } else if flags.force_sign {
+                                            string = format!("+{}", string);
+                                        }
+                                    }
                                 }
-                                // 'u' => {}
-                                // 'o' => {}
-                                // 'x' | 'X' => {}
-                                // 'f' | 'F' => {}
-                                // 'e' | 'E' => {}
-                                // 'g' | 'G' => {}
-                                // 'a' | 'A' => {}
-                                // 'c' => {}
-                                // 's' => {}
-                                // 'q' => {}
-                                _ => unreachable!("Unexpected specifier: {}", specifier)
+                                results.extend_from_slice(string.as_bytes())
                             }
+                            // 'u' => {}
+                            // 'o' => {}
+                            // 'x' | 'X' => {}
+                            // 'f' | 'F' => {}
+                            // 'e' | 'E' => {}
+                            // 'g' | 'G' => {}
+                            // 'a' | 'A' => {}
+                            // 'c' => {}
+                            // 's' => {}
+                            // 'q' => {}
+                            _ => unreachable!("Unexpected specifier: {}", specifier)
                         }
-                    };
-                }
+                    }
+                };
+            }
 
-                Varargs::from(LuaString::from(results.into_boxed_slice()))
-            }
-            Err(err) => {
-                return Err(TracedError::from_rust(ArgumentError::InvalidPatternOrFormat { message: format!("{}", err) }, lua_func!(format)));
-            }
+            Varargs::ok_from(LuaString::from(results.into_boxed_slice()))
         }
-    };
-    trace_error!(result, format)
+        Err(err) => {
+            return Err(ArgumentError::InvalidPatternOrFormat { message: format!("{}", err) })?;
+        }
+    }
 }
 
-pub fn gmatch(_execstate: &mut ExecutionState, _params: &[LuaValue]) -> Result<Varargs, TracedError> {
+pub fn gmatch(_execstate: &mut ExecutionState, _params: &[LuaValue]) -> Result<Varargs, TraceableError> {
     unimplemented!()
 }
 
@@ -379,212 +366,189 @@ fn parse_repl(input: &[u8]) -> Result<Vec<ReplacementElement>, ArgumentError> {
     Ok(vec)
 }
 
-pub fn gsub(execstate: &mut ExecutionState, params: &[LuaValue]) -> Result<Varargs, TracedError> {
-    let result: Result<Varargs, TraceableError> = try {
-        let string = params.try_coerce::<LuaString>(0)?;
-        let pattern = params.try_coerce::<LuaString>(1)?;
+pub fn gsub(execstate: &mut ExecutionState, params: &[LuaValue]) -> Result<Varargs, TraceableError> {
+    let string = params.try_coerce::<LuaString>(0)?;
+    let pattern = params.try_coerce::<LuaString>(1)?;
 
-        let repl = match params.get(2) {
-            Some(LuaValue::STRING(s)) => {
-                match parse_repl(s.as_bytes()) {
-                    Ok(replacement) => {
-                        Union3::One(replacement)
-                    }
-                    Err(err) => {
-                        return Err(TracedError::from_rust(err, lua_func!(gsub)));
-                    }
-                }
-            }
-            Some(LuaValue::TABLE(t)) => Union3::Two(t),
-            Some(LuaValue::FUNCTION(f)) => Union3::Three(f),
-            _ => return Err(TracedError::from_rust(ArgumentError::InvalidArgument { expected: "string, table or function".to_string(), found: params.get_value_or_nil(2).type_name(), index: 2 }, lua_func!(gsub)))
-        };
-        // TODO Check 'as usize' conversion for negative numbers elsewhere; it's a mem::transmute!
-        let n = params.try_coerce::<LUA_INT>(3).ok().map(|i| i.max(0) as usize);
+    let repl = match params.get(2) {
+        Some(LuaValue::STRING(s)) => Union3::One(parse_repl(s.as_bytes())?),
+        Some(LuaValue::TABLE(t)) => Union3::Two(t),
+        Some(LuaValue::FUNCTION(f)) => Union3::Three(f),
+        _ => Err(ArgumentError::InvalidArgument { expected: "string, table or function".to_string(), found: params.get_value_or_nil(2).type_name(), index: 2 })?
+    };
+    // TODO Check 'as usize' conversion for negative numbers elsewhere; it's a mem::transmute!
+    let n = params.try_coerce::<LUA_INT>(3).ok().map(|i| i.max(0) as usize);
 
-        if n.contains(&0) {
-            return Ok(Varargs::from((string.clone(), 0usize)));
+    if n.contains(&0) {
+        return Ok(Varargs::from((string.clone(), 0usize)));
+    }
+
+    let mut replacement_func_call_error = None;
+
+
+    let regex = compile_pattern(pattern.as_bytes())?;
+    let mut substitution_count = 0usize;
+    let result = match repl {
+        Union3::One(repl) => {
+            regex.replacen(
+                string.as_bytes(),
+                n.unwrap_or(std::usize::MAX),
+                |captures: &Captures| {
+                    substitution_count += 1;
+                    let mut replacement: Vec<u8> = Vec::new();
+                    for element in &repl {
+                        match element {
+                            ReplacementElement::RawString(s) => replacement.push(*s),
+                            ReplacementElement::Capture(c) => {
+                                if let Some(m) = captures.get(*c as usize) {
+                                    replacement.extend_from_slice(m.as_bytes())
+                                }
+                            }
+                        }
+                    }
+                    replacement
+                },
+            )
         }
-
-        let mut replacement_func_call_error = None;
-
-
-        let regex = compile_pattern(pattern.as_bytes())?;
-        let mut substitution_count = 0usize;
-        let result = match repl {
-            Union3::One(repl) => {
-                regex.replacen(
-                    string.as_bytes(),
-                    n.unwrap_or(std::usize::MAX),
-                    |captures: &Captures| {
-                        substitution_count += 1;
-                        let mut replacement: Vec<u8> = Vec::new();
-                        for element in &repl {
-                            match element {
-                                ReplacementElement::RawString(s) => replacement.push(*s),
-                                ReplacementElement::Capture(c) => {
-                                    if let Some(m) = captures.get(*c as usize) {
-                                        replacement.extend_from_slice(m.as_bytes())
-                                    }
+        Union3::Two(table) => {
+            regex.replacen(
+                string.as_bytes(),
+                n.unwrap_or(std::usize::MAX),
+                |captures: &Captures| {
+                    substitution_count += 1;
+                    let key = LuaValue::from(captures.get(0).expect("gsub replacement without 0-capture!").as_bytes());
+                    if let Some(s) = table.raw_get(&key).ok().as_ref().map(LuaString::coerce_from).and_then(Result::ok) {   // TODO: Check if metatable __index applies here
+                        s
+                    } else {
+                        LuaString::from("")
+                    }
+                },
+            )
+        }
+        Union3::Three(function) => {
+            regex.replacen(
+                string.as_bytes(),
+                n.unwrap_or(std::usize::MAX),
+                |captures: &Captures| {
+                    substitution_count += 1;
+                    if replacement_func_call_error.is_none() {
+                        let arguments: Vec<LuaValue> = captures.iter().map(|c| c.map(|m| LuaValue::from(LuaString::from(m.as_bytes()))).unwrap_or(LuaValue::NIL)).collect();
+                        let args = if arguments.len() > 1 {
+                            &arguments[1..]
+                        } else {
+                            &arguments[..]
+                        };
+                        match vm::helper::do_call_from_rust(lua_func!(gsub), LuaValue::from((*function).clone()), execstate, args) {
+                            Ok(result) => {
+                                if let Some(s) = result.opt(0).map(LuaString::coerce_from).and_then(Result::ok) {
+                                    s
+                                } else {
+                                    LuaString::from(captures.get(0).expect("gsub replacement without 0-capture!").as_bytes())
                                 }
                             }
-                        }
-                        replacement
-                    },
-                )
-            }
-            Union3::Two(table) => {
-                regex.replacen(
-                    string.as_bytes(),
-                    n.unwrap_or(std::usize::MAX),
-                    |captures: &Captures| {
-                        substitution_count += 1;
-                        let key = LuaValue::from(captures.get(0).expect("gsub replacement without 0-capture!").as_bytes());
-                        if let Some(s) = table.raw_get(&key).ok().as_ref().map(LuaString::coerce_from).and_then(Result::ok) {   // TODO: Check if metatable __index applies here
-                            s
-                        } else {
-                            LuaString::from("")
-                        }
-                    },
-                )
-            }
-            Union3::Three(function) => {
-                regex.replacen(
-                    string.as_bytes(),
-                    n.unwrap_or(std::usize::MAX),
-                    |captures: &Captures| {
-                        substitution_count += 1;
-                        if replacement_func_call_error.is_none() {
-                            let arguments: Vec<LuaValue> = captures.iter().map(|c| c.map(|m| LuaValue::from(LuaString::from(m.as_bytes()))).unwrap_or(LuaValue::NIL)).collect();
-                            let args = if arguments.len() > 1 {
-                                &arguments[1..]
-                            } else {
-                                &arguments[..]
-                            };
-                            match vm::helper::do_call_from_rust(lua_func!(gsub), LuaValue::from((*function).clone()), execstate, args) {
-                                Ok(result) => {
-                                    if let Some(s) = result.opt(0).map(LuaString::coerce_from).and_then(Result::ok) {
-                                        s
-                                    } else {
-                                        LuaString::from(captures.get(0).expect("gsub replacement without 0-capture!").as_bytes())
-                                    }
-                                }
-                                Err(err) => {
-                                    replacement_func_call_error.replace(err);
-                                    LuaString::from("")
-                                }
+                            Err(err) => {
+                                replacement_func_call_error.replace(err);
+                                LuaString::from("")
                             }
-                        } else {
-                            LuaString::from("")
                         }
-                    },
-                )
-            }
-        };
-
-        Varargs::from((result.as_bytes(), substitution_count))
+                    } else {
+                        LuaString::from("")
+                    }
+                },
+            )
+        }
     };
-    trace_error!(result, gsub)
+    Varargs::ok_from((result.as_bytes(), substitution_count))
 }
 
-pub fn len(_execstate: &mut ExecutionState, params: &[LuaValue]) -> Result<Varargs, TracedError> {
-    let result: Result<Varargs, TraceableError> = try {
-        let string = params.try_coerce::<LuaString>(0)?;
-        Varargs::from(string.len())
-    };
-    trace_error!(result, len)
+pub fn len(_execstate: &mut ExecutionState, params: &[LuaValue]) -> Result<Varargs, TraceableError> {
+    Varargs::ok_from(
+        params.try_coerce::<LuaString>(0)?
+            .len()
+    )
 }
 
-pub fn lower(_execstate: &mut ExecutionState, _params: &[LuaValue]) -> Result<Varargs, TracedError> {
+pub fn lower(_execstate: &mut ExecutionState, _params: &[LuaValue]) -> Result<Varargs, TraceableError> {
     unimplemented!()
 }
 
-pub fn string_match(_execstate: &mut ExecutionState, _params: &[LuaValue]) -> Result<Varargs, TracedError> {
+pub fn string_match(_execstate: &mut ExecutionState, _params: &[LuaValue]) -> Result<Varargs, TraceableError> {
     unimplemented!()
 }
 
-pub fn pack(_execstate: &mut ExecutionState, params: &[LuaValue]) -> Result<Varargs, TracedError> {
-    let result: Result<Varargs, TraceableError> = try {
-        let _format_string = params.try_coerce::<LuaString>(0)?;
-        debug_assert!(params.len() > 0);    // We can assume this as the above fails with length 0
-        let _arguments = &params[1..];
+pub fn pack(_execstate: &mut ExecutionState, params: &[LuaValue]) -> Result<Varargs, TraceableError> {
+    let _format_string = params.try_coerce::<LuaString>(0)?;
+    debug_assert!(params.len() > 0);    // We can assume this as the above fails with length 0
+    let _arguments = &params[1..];
 
-        unimplemented!()
-    };
-    trace_error!(result, format)
+    unimplemented!()
 }
 
-pub fn packsize(_execstate: &mut ExecutionState, params: &[LuaValue]) -> Result<Varargs, TracedError> {
+pub fn packsize(_execstate: &mut ExecutionState, params: &[LuaValue]) -> Result<Varargs, TraceableError> {
     use std::mem;
     use crate::constants::types::*;
 
-    let result: Result<Varargs, TraceableError> = try {
-        let format_string = params.try_coerce::<LuaString>(0)?;
-        let mut size = 0usize;  // TODO: perhaps check overflows?
-        for byte in format_string.as_bytes() {
-            size += match byte {
-                b'b' | b'B' => mem::size_of::<HOST_BYTE>(),
-                b'j' | b'J' => mem::size_of::<LUA_INT>(),
-                _ => Err(ArgumentError::InvalidPatternOrFormat { message: format!("Unknown pack format option: {}", *byte as char) })?
-            };
-        }
-        Varargs::from(size)
-    };
-    trace_error!(result, format)
+    let format_string = params.try_coerce::<LuaString>(0)?;
+    let mut size = 0usize;  // TODO: perhaps check overflows?
+    for byte in format_string.as_bytes() {
+        size += match byte {
+            b'b' | b'B' => mem::size_of::<HOST_BYTE>(),
+            b'j' | b'J' => mem::size_of::<LUA_INT>(),
+            _ => Err(ArgumentError::InvalidPatternOrFormat { message: format!("Unknown pack format option: {}", *byte as char) })?
+        };
+    }
+    Varargs::ok_from(size)
 }
 
-pub fn rep(_execstate: &mut ExecutionState, params: &[LuaValue]) -> Result<Varargs, TracedError> {
-    let result: Result<Varargs, TraceableError> = try {
-        let string = params.try_coerce::<LuaString>(0)?;
-        let repetitions = params.try_coerce::<LUA_INT>(1)?;
-        let separator = params.try_coerce::<LuaString>(2).ok();
+pub fn rep(_execstate: &mut ExecutionState, params: &[LuaValue]) -> Result<Varargs, TraceableError> {
+    let string = params.try_coerce::<LuaString>(0)?;
+    let repetitions = params.try_coerce::<LUA_INT>(1)?;
+    let separator = params.try_coerce::<LuaString>(2).ok();
 
-        if repetitions > 0 {
-            let size = string.len()
-                .checked_mul(repetitions as usize)  // Multiply string length by repetitions to get length of the new string before the separator
-                .and_then(|s| // Add cumulative length of the separators
-                    separator.as_ref().map(LuaString::len).unwrap_or(0usize)
-                        .checked_mul(repetitions as usize)
-                        .and_then(|sep_len| sep_len.checked_add(s))
-                )
-                .ok_or(ArgumentError::ConcatenationTooLarge)?;  // If we overflowed anywhere in the above calculation, raise the ConcatenationTooLarge error
-            // TODO: Sensibility check on the above size, as it currently permits strings into the exabyte range
+    if repetitions > 0 {
+        let size = string.len()
+            .checked_mul(repetitions as usize)  // Multiply string length by repetitions to get length of the new string before the separator
+            .and_then(|s| // Add cumulative length of the separators
+                separator.as_ref().map(LuaString::len).unwrap_or(0usize)
+                    .checked_mul(repetitions as usize)
+                    .and_then(|sep_len| sep_len.checked_add(s))
+            )
+            .ok_or(ArgumentError::ConcatenationTooLarge)?;  // If we overflowed anywhere in the above calculation, raise the ConcatenationTooLarge error
+        // TODO: Sensibility check on the above size, as it currently permits strings into the exabyte range
 
-            let buffer = if separator.is_none() || separator.as_ref().map(LuaString::len).contains(&0) {
-                string.as_bytes().repeat(repetitions as usize)
-            } else {
-                let separator = separator.unwrap(); // We already checked is_none above.
-                let mut buffer = Vec::with_capacity(size);
-                for i in 0..repetitions {
-                    if i != 0 {
-                        buffer.extend_from_slice(separator.as_bytes())
-                    }
-                    buffer.extend_from_slice(string.as_bytes())
-                }
-                buffer
-            };
-
-            Varargs::from(LuaString::from(buffer.into_boxed_slice()))
+        let buffer = if separator.is_none() || separator.as_ref().map(LuaString::len).contains(&0) {
+            string.as_bytes().repeat(repetitions as usize)
         } else {
-            Varargs::from(LuaString::from(""))
-        }
-    };
-    trace_error!(result, rep)
+            let separator = separator.unwrap(); // We already checked is_none above.
+            let mut buffer = Vec::with_capacity(size);
+            for i in 0..repetitions {
+                if i != 0 {
+                    buffer.extend_from_slice(separator.as_bytes())
+                }
+                buffer.extend_from_slice(string.as_bytes())
+            }
+            buffer
+        };
+
+        Varargs::ok_from(LuaString::from(buffer.into_boxed_slice()))
+    } else {
+        Varargs::ok_from(LuaString::from(""))
+    }
 }
 
-pub fn reverse(_execstate: &mut ExecutionState, _params: &[LuaValue]) -> Result<Varargs, TracedError> {
+pub fn reverse(_execstate: &mut ExecutionState, _params: &[LuaValue]) -> Result<Varargs, TraceableError> {
     unimplemented!()
 }
 
-pub fn sub(_execstate: &mut ExecutionState, _params: &[LuaValue]) -> Result<Varargs, TracedError> {
+pub fn sub(_execstate: &mut ExecutionState, _params: &[LuaValue]) -> Result<Varargs, TraceableError> {
     unimplemented!()
 }
 
-pub fn unpack(_execstate: &mut ExecutionState, _params: &[LuaValue]) -> Result<Varargs, TracedError> {
+pub fn unpack(_execstate: &mut ExecutionState, _params: &[LuaValue]) -> Result<Varargs, TraceableError> {
     unimplemented!()
 }
 
-pub fn upper(_execstate: &mut ExecutionState, _params: &[LuaValue]) -> Result<Varargs, TracedError> {
+pub fn upper(_execstate: &mut ExecutionState, _params: &[LuaValue]) -> Result<Varargs, TraceableError> {
     unimplemented!()
 }
 

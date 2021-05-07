@@ -9,7 +9,7 @@ use crate::types::locvar::LocVar;
 use std::cell::RefCell;
 use crate::vm::ExecutionState;
 use crate::types::varargs::Varargs;
-use crate::error::TracedError;
+use crate::error::TraceableError;
 use crate::types::{AsLuaPointer, ref_to_pointer, LuaType, CoerceFrom};
 use crate::constants::opcodes;
 
@@ -444,18 +444,18 @@ impl ClosureImpl {
 #[derive(Copy, Clone)]
 pub struct NativeFunction {
     name: &'static str,
-    inner: fn(&mut ExecutionState, &[LuaValue]) -> Result<Varargs, TracedError>,
+    inner: fn(&mut ExecutionState, &[LuaValue]) -> Result<Varargs, TraceableError>,
 }
 
 impl NativeFunction {
-    pub fn from_parts(name: &'static str, inner: fn(&mut ExecutionState, &[LuaValue]) -> Result<Varargs, TracedError>) -> NativeFunction {
+    pub fn from_parts(name: &'static str, inner: fn(&mut ExecutionState, &[LuaValue]) -> Result<Varargs, TraceableError>) -> NativeFunction {
         NativeFunction {
             name,
             inner,
         }
     }
 
-    pub fn ptr(&self) -> fn(&mut ExecutionState, &[LuaValue]) -> Result<Varargs, TracedError> {
+    pub fn ptr(&self) -> fn(&mut ExecutionState, &[LuaValue]) -> Result<Varargs, TraceableError> {
         self.inner
     }
 
@@ -478,7 +478,20 @@ impl<T: Into<LuaValue> + Clone> CoerceFrom<T> for NativeFunction {
     }
 }
 
-pub type NativeClosure = Rc<RefCell<dyn FnMut(&mut ExecutionState, &[LuaValue]) -> Result<Varargs, TracedError>>>;
+#[derive(Clone)]
+pub struct NativeClosure {
+    pub name: &'static str,
+    pub(crate) closure: Rc<RefCell<dyn FnMut(&mut ExecutionState, &[LuaValue]) -> Result<Varargs, TraceableError>>>
+}
+
+impl NativeClosure {
+    pub fn new(name: &'static str, closure: Rc<RefCell<dyn FnMut(&mut ExecutionState, &[LuaValue]) -> Result<Varargs, TraceableError>>>) -> NativeClosure {
+        NativeClosure {
+            name,
+            closure
+        }
+    }
+}
 
 impl LuaType for NativeClosure {
     const CONTAINER_NAME: &'static str = "Host closure";
@@ -565,7 +578,7 @@ impl AsLuaPointer for LuaFunction {
         match self {
             LuaFunction::LUA_CLOSURE(c) => ref_to_pointer(c.as_ref()),  // Pointer to refcell, as refcell has exclusive ownership of the closure we don't need to enter and get a ref to it's contents it here
             LuaFunction::RUST_FUNCTION(f) => f.inner as *const () as usize,      // Deref function pointer into raw pointer
-            LuaFunction::RUST_CLOSURE(c) => ref_to_pointer(c.as_ref()), // Ditto
+            LuaFunction::RUST_CLOSURE(c) => ref_to_pointer(c.closure.as_ref()), // Ditto
         }
     }
 }

@@ -321,22 +321,23 @@ impl LuaValue {
     }
 
     /// Handles the `__call` metamethod
-    pub fn prep_call_with_metatable(self, metatables: &TypeMetatables) -> Option<LuaFunction> {
+    /// Returns self on error
+    pub fn prep_call_with_metatable(self, metatables: &TypeMetatables) -> Result<LuaFunction, ArgumentError> {
         match self {
-            LuaValue::FUNCTION(function) => Some(function),
+            LuaValue::FUNCTION(function) => Ok(function),
             _ => {
                 if let Some(meta) = self.get_metatable(metatables) {
                     if let Ok(value) = meta.raw_get_into("__call") {
                         if value != LuaValue::NIL {
                             value.prep_call_with_metatable(metatables)
                         } else {
-                            None
+                            Err(ArgumentError::AttemptToCallNonFunction(self))
                         }
                     } else {
                         unreachable!("Raw table gets with &str may not error!")
                     }
                 } else {
-                    None
+                    Err(ArgumentError::AttemptToCallNonFunction(self))
                 }
             }
         }
