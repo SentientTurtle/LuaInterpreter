@@ -1,4 +1,3 @@
-use crate::vm;
 use crate::lua_func;
 use crate::vm::ExecutionState;
 use crate::error::{ArgumentError, TraceableError};
@@ -438,7 +437,7 @@ pub fn gsub(execstate: &mut ExecutionState, params: &[LuaValue]) -> Result<Varar
                         } else {
                             &arguments[..]
                         };
-                        match vm::helper::do_call_from_rust(lua_func!(gsub), LuaValue::from((*function).clone()), execstate, args) {
+                        match function.call(execstate, args) {
                             Ok(result) => {
                                 if let Some(s) = result.opt(0).map(LuaString::coerce_from).and_then(Result::ok) {
                                     s

@@ -95,14 +95,7 @@ impl TracedError {
     }
 
     pub fn message(self) -> LuaValue {
-        match self.cause {
-            LuaError::ArgumentError(err) => LuaValue::from(LuaString::UNICODE(Rc::from(format!("{}", err)))),
-            LuaError::ByteCodeError(err) => LuaValue::from(LuaString::UNICODE(Rc::from(format!("{}", err)))),
-            LuaError::CompileError(err) => LuaValue::from(LuaString::UNICODE(Rc::from(format!("{}", err)))),
-            LuaError::DecodeError(err) => LuaValue::from(LuaString::UNICODE(Rc::from(format!("{}", err)))),
-            LuaError::UserError { message, level: _ } => message.unwrap_or(LuaValue::NIL),
-            LuaError::InterpreterBug { message } => LuaValue::from(message),
-        }
+        self.cause.message()
     }
 }
 
@@ -152,6 +145,13 @@ impl TraceableError {
             TraceableError::LUA(error) => TracedError::from_tailcall(error)
         }
     }
+
+    pub fn message(self) -> LuaValue {
+        match self {
+            TraceableError::TRACED(error) => error.message(),
+            TraceableError::LUA(error) => error.message()
+        }
+    }
 }
 
 impl<T: Into<LuaError>> From<T> for TraceableError {
@@ -187,6 +187,17 @@ impl LuaError {
 
     pub fn interpreter_bug(message: &'static str) -> Self {
         LuaError::InterpreterBug { message }
+    }
+
+    pub fn message(self) -> LuaValue {
+        match self {
+            LuaError::ArgumentError(err) => LuaValue::from(LuaString::UNICODE(Rc::from(format!("{}", err)))),
+            LuaError::ByteCodeError(err) => LuaValue::from(LuaString::UNICODE(Rc::from(format!("{}", err)))),
+            LuaError::CompileError(err) => LuaValue::from(LuaString::UNICODE(Rc::from(format!("{}", err)))),
+            LuaError::DecodeError(err) => LuaValue::from(LuaString::UNICODE(Rc::from(format!("{}", err)))),
+            LuaError::UserError { message, level: _ } => message.unwrap_or(LuaValue::NIL),
+            LuaError::InterpreterBug { message } => LuaValue::from(message),
+        }
     }
 }
 

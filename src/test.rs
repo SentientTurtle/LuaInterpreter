@@ -94,4 +94,37 @@ fn aaa_reproduce() {
     do_test(stringify!( aaa_reproduce ));
 }
 
-test!(api, attrib, big, bitwise, calls, closure, code, constructs, coroutine, db, errors, events, files, goto, literals, locals, math, nextvar, pm, sort, strings, tpack, utf8, vararg, verybig);
+test!(
+    all,
+    api,
+    attrib,
+    big,
+    bitwise,
+    bwcoercion,
+    calls,
+    closure,
+    code,
+    constructs,
+    coroutine,
+    cstack,
+    db,
+    errors,
+    events,
+    files,
+    gc,
+    gengc,
+    goto,
+    heavy,
+    literals,
+    locals,
+    main,
+    math,
+    nextvar,
+    pm,
+    sort,
+    strings,
+    tpack,
+    utf8,
+    vararg,
+    verybig
+);

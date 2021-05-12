@@ -1,6 +1,6 @@
 use crate::error::{LuaError, ArgumentError, TraceableError};
 use crate::vm::ExecutionState;
-use crate::{vm, constants};
+use crate::constants;
 use std::rc::Rc;
 use std::cell::RefCell;
 use crate::constants::types::{LUA_INT, LUA_FLOAT};
@@ -130,7 +130,7 @@ pub fn load(execstate: &mut ExecutionState, params: &[LuaValue]) -> Result<Varar
         Union2::Two(function) => {
             let mut chunk = Vec::new();
             loop {  // TODO: Add break condition in case of infinite loop
-                let chunkpiece = vm::helper::do_call_from_rust(lua_func!(load), LuaValue::from(function.clone()), execstate, &[])?;
+                let chunkpiece = function.call(execstate, &[])?;
                 match chunkpiece.opt(0) {
                     None | Some(LuaValue::NIL) => break,
                     Some(LuaValue::STRING(string)) if string.len() == 0 => break,
@@ -169,7 +169,7 @@ pub fn load(execstate: &mut ExecutionState, params: &[LuaValue]) -> Result<Varar
         LuaValue::from(execstate.global_env.clone())
     };
 
-    Ok(Varargs::from(LuaFunction::from_proto_with_env(prototype, env)))
+    Ok(Varargs::from(LuaFunction::from((prototype, env))))
 }
 
 pub fn loadfile(_execstate: &mut ExecutionState, _params: &[LuaValue]) -> Result<Varargs, TraceableError> {
@@ -186,8 +186,8 @@ pub fn next(_execstate: &mut ExecutionState, params: &[LuaValue]) -> Result<Vara
 pub fn pairs(execstate: &mut ExecutionState, params: &[LuaValue]) -> Result<Varargs, TraceableError> {
     if let Some(val) = params.first() {
         if let Some(metatable) = val.get_metatable(&execstate.metatables) {
-            if let Ok(function_value) = metatable.raw_get_into("__pairs") {
-                let result = vm::helper::do_call_from_rust(lua_func!(pairs), function_value, execstate, &[val.clone()])?;
+            if let Ok(function) = metatable.raw_get_into("__pairs") {
+                let result = function.call(execstate, &[val.clone()])?;
                 return Ok(result.select_range(0..=3));
             }
         }
@@ -206,7 +206,7 @@ pub fn pcall(execstate: &mut ExecutionState, params: &[LuaValue]) -> Result<Vara
             found: params.first().unwrap_or(&LuaValue::NIL).type_name(),
             index: 0,
         })?;
-    let result = match vm::helper::do_call_from_rust(lua_func!(pcall), func.clone(), execstate, params) {
+    let result = match func.clone().call(execstate, params) {
         Ok(result) => Varargs::prepend(LuaValue::from(true), &result),
         Err(err) => Varargs::from((LuaValue::from(false), err.message())),
     };
@@ -320,8 +320,8 @@ pub fn tonumber(_execstate: &mut ExecutionState, params: &[LuaValue]) -> Result<
 pub fn tostring(execstate: &mut ExecutionState, params: &[LuaValue]) -> Result<Varargs, TraceableError> {
     if let Some(val) = params.first() {
         if let Some(metatable) = val.get_metatable(&execstate.metatables) {
-            if let Ok(function_value) = metatable.raw_get_into("__tostring") {
-                return Ok(vm::helper::do_call_from_rust(lua_func!(tostring), function_value, execstate, &[val.clone()])?);
+            if let Ok(function) = metatable.raw_get_into("__tostring") {
+                return function.call(execstate, &[val.clone()]);
             }
         }
         Varargs::ok_from(format!("{}", val))
@@ -345,12 +345,12 @@ pub fn xpcall(execstate: &mut ExecutionState, params: &[LuaValue]) -> Result<Var
     let (func, remainder) = params.split_first().ok_or(ArgumentError::InvalidArgument { expected: "function".to_string(), found: params.get_value_or_nil(0).type_name(), index: 0 })?;
     let (handler, params) = remainder.split_first().ok_or(ArgumentError::InvalidArgument { expected: "message handler".to_string(), found: remainder.get_value_or_nil(0).type_name(), index: 1 })?;
 
-    let (call_result, is_err) = match vm::helper::do_call_from_rust(lua_func!(xpcall), func.clone(), execstate, params) {
+    let (call_result, is_err) = match func.clone().call(execstate, params) {
         Ok(result) => (result, false),
         Err(err) => (Varargs::from(err.message()), true),
     };
 
-    let result = vm::helper::do_call_from_rust(lua_func!(xpcall), handler.clone(), execstate, call_result.as_slice())?;
+    let result = handler.clone().call(execstate, call_result.as_slice())?;
     Ok(Varargs::prepend(LuaValue::from(is_err), &result))
 }
 

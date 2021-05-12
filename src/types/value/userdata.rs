@@ -8,8 +8,8 @@ use crate::types::value::LuaValue;
 
 #[derive(Debug)]
 struct UserDataImpl {
-    pub metatable: Option<LuaTable>,
-    pub value: dyn Any,
+    metatable: Option<LuaTable>,
+    pub value: Box<dyn Any>,
 }
 
 #[derive(Clone, Debug)]
@@ -38,8 +38,18 @@ impl AsLuaPointer for UserData {
 }
 
 impl UserData {
+    pub fn new<T: 'static>(value: T) -> UserData {
+        UserData {
+            inner: Rc::new(UserDataImpl { metatable: None, value: Box::new(value) })
+        }
+    }
+
     pub fn metatable(&self) -> Option<LuaTable> {
         self.inner.metatable.clone()
+    }   // TODO: Why clone?
+
+    pub fn downcast<T: 'static>(&self) -> Option<&T> {
+        (*self.inner.value).downcast_ref::<T>()
     }
 }
 

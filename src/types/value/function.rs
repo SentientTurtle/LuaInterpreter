@@ -12,6 +12,7 @@ use crate::types::varargs::Varargs;
 use crate::error::TraceableError;
 use crate::types::{AsLuaPointer, ref_to_pointer, LuaType, CoerceFrom};
 use crate::constants::opcodes;
+use std::ops::DerefMut;
 
 pub struct Prototype {
     // TODO: Extract debug info to it's own type
@@ -444,19 +445,19 @@ impl ClosureImpl {
 #[derive(Copy, Clone)]
 pub struct NativeFunction {
     name: &'static str,
-    inner: fn(&mut ExecutionState, &[LuaValue]) -> Result<Varargs, TraceableError>,
+    function: fn(&mut ExecutionState, &[LuaValue]) -> Result<Varargs, TraceableError>,
 }
 
 impl NativeFunction {
     pub fn from_parts(name: &'static str, inner: fn(&mut ExecutionState, &[LuaValue]) -> Result<Varargs, TraceableError>) -> NativeFunction {
         NativeFunction {
             name,
-            inner,
+            function: inner,
         }
     }
 
     pub fn ptr(&self) -> fn(&mut ExecutionState, &[LuaValue]) -> Result<Varargs, TraceableError> {
-        self.inner
+        self.function
     }
 
     pub fn name(&self) -> &'static str {
@@ -532,19 +533,44 @@ pub enum LuaFunction {
 }
 
 impl LuaFunction {
-    pub fn from_proto_with_env(proto: Prototype, env: LuaValue) -> LuaFunction {
-        LuaFunction::LUA_CLOSURE(
-            Rc::from(
-                RefCell::from(
-                    ClosureImpl::from_proto_with_env(proto, env)
-                )
-            )
-        )
+    pub fn call(&self, execstate: &mut ExecutionState, params: &[LuaValue]) -> Result<Varargs, TraceableError> {
+        match self {
+            LuaFunction::LUA_CLOSURE(closure) => {
+                crate::vm::execute_closure(&mut *closure.borrow_mut(), execstate, params)
+                    .map_err(TraceableError::TRACED)
+            }
+            LuaFunction::RUST_FUNCTION(function) => {
+                function.ptr()(execstate, params)
+                    .map_err(|e| e.trace_native_wrap(function.clone()))
+            }
+            LuaFunction::RUST_CLOSURE(closure) => {
+                closure.closure.borrow_mut().deref_mut()(execstate, params)
+                    .map_err(|e| e.trace_closure_wrap(closure.name))
+            }
+        }
     }
 }
 
 impl LuaType for LuaFunction {
     const CONTAINER_NAME: &'static str = "function";
+}
+
+impl From<(&'static str, fn(&mut ExecutionState, &[LuaValue]) -> Result<Varargs, TraceableError>)> for LuaFunction {
+    fn from((name, function): (&'static str, fn(&mut ExecutionState, &[LuaValue]) -> Result<Varargs, TraceableError>)) -> Self {
+        LuaFunction::RUST_FUNCTION(NativeFunction { name, function })
+    }
+}
+
+impl From<(Prototype, LuaValue)> for LuaFunction {
+    fn from((prototype, env): (Prototype, LuaValue)) -> Self {
+        LuaFunction::LUA_CLOSURE(
+            Rc::from(
+                RefCell::from(
+                    ClosureImpl::from_proto_with_env(prototype, env)
+                )
+            )
+        )
+    }
 }
 
 impl<T: Into<LuaValue> + Clone> CoerceFrom<T> for LuaFunction {
@@ -561,7 +587,7 @@ impl Debug for LuaFunction {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
             LuaFunction::LUA_CLOSURE(c) => f.debug_tuple("LuaFunction::LUA_CLOSURE").field(c).finish(),
-            LuaFunction::RUST_FUNCTION(func) => f.debug_tuple("LuaFunction::RUST_FUNCTION").field(&(func.inner as *const ())).finish(),          // Deref function pointer into raw pointer
+            LuaFunction::RUST_FUNCTION(func) => f.debug_tuple("LuaFunction::RUST_FUNCTION").field(&(func.function as *const ())).finish(),          // Deref function pointer into raw pointer
             LuaFunction::RUST_CLOSURE(c) => f.debug_tuple("LuaFunction::RUST_CLOSURE").field(&(c as *const NativeClosure)).finish()
         }
     }
@@ -577,7 +603,7 @@ impl AsLuaPointer for LuaFunction {
     fn as_lua_pointer(&self) -> usize {
         match self {
             LuaFunction::LUA_CLOSURE(c) => ref_to_pointer(c.as_ref()),  // Pointer to refcell, as refcell has exclusive ownership of the closure we don't need to enter and get a ref to it's contents it here
-            LuaFunction::RUST_FUNCTION(f) => f.inner as *const () as usize,      // Deref function pointer into raw pointer
+            LuaFunction::RUST_FUNCTION(f) => f.function as *const () as usize,      // Deref function pointer into raw pointer
             LuaFunction::RUST_CLOSURE(c) => ref_to_pointer(c.closure.as_ref()), // Ditto
         }
     }

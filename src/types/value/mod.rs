@@ -1,10 +1,10 @@
 use crate::types::value::number::LuaNumber;
 use crate::types::value::string::LuaString;
 use crate::types::value::userdata::UserData;
-use crate::types::value::function::{LuaFunction};
+use crate::types::value::function::{LuaFunction, Prototype};
 use crate::types::value::thread::LuaThread;
 use crate::types::value::table::LuaTable;
-use crate::error::ArgumentError;
+use crate::error::{ArgumentError, TraceableError};
 use crate::constants::types::{LUA_FLOAT, LUA_INT};
 use std::ops::Not;
 use std::fmt::{Display, Formatter};
@@ -14,6 +14,8 @@ use std::rc::Rc;
 use std::ops::{Add, Sub, Mul, Div, Rem, BitAnd, BitOr, BitXor, Shl, Shr, Neg};
 use std::cmp::Ordering;
 use crate::types::{AsLuaPointer, LuaType, CoerceFrom};
+use crate::vm::ExecutionState;
+use crate::types::varargs::Varargs;
 
 pub mod number;
 pub mod string;
@@ -69,9 +71,23 @@ impl Default for LuaValue {
     }
 }
 
+// TODO: Copy all From<> implementations from variants
+
 impl From<bool> for LuaValue {
     fn from(b: bool) -> Self {
         LuaValue::BOOLEAN(b)
+    }
+}
+
+impl From<LuaNumber> for LuaValue {
+    fn from(n: LuaNumber) -> Self {
+        LuaValue::NUMBER(n)
+    }
+}
+
+impl From<LuaString> for LuaValue {
+    fn from(s: LuaString) -> Self {
+        LuaValue::STRING(s)
     }
 }
 
@@ -99,15 +115,15 @@ impl From<&str> for LuaValue {
     }
 }
 
-impl From<&[u8]> for LuaValue {
-    fn from(string: &[u8]) -> Self {
-        LuaValue::STRING(LuaString::from(string))
-    }
-}
-
 impl From<String> for LuaValue {
     fn from(s: String) -> Self {
         LuaValue::STRING(LuaString::UNICODE(Rc::from(s)))
+    }
+}
+
+impl From<&[u8]> for LuaValue {
+    fn from(string: &[u8]) -> Self {
+        LuaValue::STRING(LuaString::from(string))
     }
 }
 
@@ -117,21 +133,15 @@ impl From<Box<[u8]>> for LuaValue {
     }
 }
 
-impl From<LuaNumber> for LuaValue {
-    fn from(n: LuaNumber) -> Self {
-        LuaValue::NUMBER(n)
-    }
-}
-
-impl From<LuaString> for LuaValue {
-    fn from(s: LuaString) -> Self {
-        LuaValue::STRING(s)
-    }
-}
-
 impl From<UserData> for LuaValue {
     fn from(u: UserData) -> Self {
         LuaValue::USERDATA(u)
+    }
+}
+
+impl LuaValue {
+    pub fn userdata_from<T: 'static>(value: T) -> LuaValue {
+        LuaValue::USERDATA(UserData::new(value))
     }
 }
 
@@ -140,6 +150,20 @@ impl From<LuaFunction> for LuaValue {
         LuaValue::FUNCTION(f)
     }
 }
+
+// impl From<(&'static str, fn(&mut ExecutionState, &[LuaValue]) -> Result<Varargs, TraceableError>)> for LuaValue {
+//     fn from((name, function): (&'static str, fn(&mut ExecutionState, &[LuaValue]) -> Result<Varargs, TraceableError>)) -> Self {
+//         LuaValue::FUNCTION(LuaFunction::from((name, function)))
+//     }
+// }
+//
+// impl From<(Prototype, LuaValue)> for LuaValue {
+//     fn from((prototype, env): (Prototype, LuaValue)) -> Self {
+//         LuaValue::FUNCTION(
+//             LuaFunction::from((prototype, env))
+//         )
+//     }
+// }
 
 impl From<LuaThread> for LuaValue {
     fn from(t: LuaThread) -> Self {
@@ -153,15 +177,11 @@ impl From<LuaTable> for LuaValue {
     }
 }
 
-// TODO: Remove
-// unsafe fn transmute<T: 'static, U: 'static>(e: T) -> U { // Regular mem::transmute does a typecheck before filling in the generic parameters
-//     debug_assert_eq!(TypeId::of::<T>(), TypeId::of::<U>());                 // TODO: Maybe replace with a regular assert
-//     debug_assert_eq!(std::mem::size_of::<T>(), std::mem::size_of::<U>());
-//     let copy = std::mem::transmute_copy(&e);    // Does this have to be transmute_copy?
-//     // TODO: Ensure no destructor for `e` is ran
-//     std::mem::forget(e);
-//     copy
-// }
+impl LuaValue {
+    pub fn table_from() -> LuaValue {
+        LuaValue::NIL  // TODO
+    }
+}
 
 impl<T: Into<LuaValue> + Clone> CoerceFrom<T> for LuaValue {
     fn coerce(value: &T) -> Option<Self> {
@@ -322,7 +342,7 @@ impl LuaValue {
 
     /// Handles the `__call` metamethod
     /// Returns self on error
-    pub fn prep_call_with_metatable(self, metatables: &TypeMetatables) -> Result<LuaFunction, ArgumentError> {
+    pub(crate) fn prep_call_with_metatable(self, metatables: &TypeMetatables) -> Result<LuaFunction, ArgumentError> {
         match self {
             LuaValue::FUNCTION(function) => Ok(function),
             _ => {
@@ -343,6 +363,11 @@ impl LuaValue {
         }
     }
 
+    pub fn call(self, execstate: &mut ExecutionState, params: &[LuaValue]) -> Result<Varargs, TraceableError> {
+        self.prep_call_with_metatable(&execstate.metatables)?
+            .call(execstate, params)
+    }
+
     pub(crate) fn non_nil(&self) -> Option<&Self> {
         match self {
             LuaValue::NIL => None,
@@ -350,6 +375,7 @@ impl LuaValue {
         }
     }
 
+    // TODO: Why does this exist
     pub(crate) fn not_nil(self) -> Option<Self> {
         match self {
             LuaValue::NIL => None,

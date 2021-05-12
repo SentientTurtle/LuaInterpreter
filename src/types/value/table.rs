@@ -103,6 +103,25 @@ impl LuaTable {
         }
     }
 
+    pub fn with_list<const N: usize>(mut values: [LuaValue; N]) -> LuaTable {
+        LuaTable::with_list_at_index(values, 1)
+    }
+
+    pub fn with_list_at_index<const N: usize>(mut values: [LuaValue; N], index: LUA_INT) -> LuaTable {
+        LuaTable::with_capacity(N, 0)
+    }
+
+    pub fn with_map<const N: usize>(mut keys: [LuaValue; N], mut values: [LuaValue; N]) -> Result<LuaTable, ArgumentError> {
+        let table = LuaTable::with_capacity(0, N);
+        for i in 0..N {
+            table.set(
+                std::mem::replace(&mut keys[i], LuaValue::NIL),
+                std::mem::replace(&mut values[i], LuaValue::NIL)
+            )?;
+        }
+        Ok(table)
+    }
+
     /// `table::get` but for Into<LuaValue> keys
     pub fn raw_get_into<K: Into<LuaValue>>(&self, key: K) -> Result<LuaValue, ArgumentError> {
         self.raw_get(&key.into())

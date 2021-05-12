@@ -120,6 +120,14 @@ impl<T: Into<LuaValue>> From<T> for Varargs {
     }
 }
 
+impl<const N: usize> From<[LuaValue; N]> for Varargs {
+    fn from(array: [LuaValue; N]) -> Self {
+        Varargs {
+            inner: Vec::from(array)
+        }
+    }
+}
+
 impl From<&[LuaValue]> for Varargs {
     fn from(slice: &[LuaValue]) -> Self {
         Varargs { inner: Vec::from(slice) }

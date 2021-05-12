@@ -32,7 +32,7 @@ pub fn require(execstate: &mut ExecutionState, params: &[LuaValue]) -> Result<Va
         let loaded_table = package_module.raw_get_into("loaded")
             .unwrap_or(LuaValue::NIL);
 
-        let module = loaded_table.index_with_metatable(&LuaValue::from(module_name.clone()), &execstate.metatables)?;
+        let module = loaded_table.index_with_metatable(&LuaValue::from(module_name.clone()), &execstate.metatables)?;   // TODO: Verify that the rest of this function acknowledges metamethods
         if module != LuaValue::NIL {
             return Ok(Varargs::from(module));
         }
@@ -40,17 +40,26 @@ pub fn require(execstate: &mut ExecutionState, params: &[LuaValue]) -> Result<Va
         let searchers = package_module.raw_get_into("searchers")
             .unwrap_or(LuaValue::NIL);
 
+        let mut error_value = LuaValue::NIL;
 
         for (_, search_function) in LuaTable::coerce_from(&searchers)?.iter() {
             debug_assert!(params.len() >= 1);   // Coercion to module_name string should fail if there are no arguments provided
-            let result = crate::vm::helper::do_call_from_rust(lua_func!(require), search_function, execstate, &params[0..=0])?;
+            let result = search_function.call(execstate, &params[0..=0])?;
 
             let [loader, data] = result.into_array::<2>();
 
-            if let LuaValue::FUNCTION(_) = &loader {
-                crate::vm::helper::do_call_from_rust(lua_func!(require), loader, execstate, &[data]);
-            } else {
+            if let LuaValue::FUNCTION(loader_function) = &loader { // TODO: Verify that this doesn't accept __CALL objects
+                let module = loader_function.call(execstate, std::slice::from_ref(&data))?.into_first();
+                if module != LuaValue::NIL {
+                    loaded_table.write_index_with_metatable(LuaValue::from(module_name.clone()), module, &execstate.metatables)?;
+                } else if loaded_table.index_with_metatable(&LuaValue::from(module_name.clone()), &execstate.metatables)? == LuaValue::NIL {    // If package.loaded[module_name] has not been set by the loader function
+                    loaded_table.write_index_with_metatable(LuaValue::from(module_name.clone()), LuaValue::BOOLEAN(true), &execstate.metatables)?;
+                }
 
+                let loaded = loaded_table.index_with_metatable(&LuaValue::from(module_name.clone()), &execstate.metatables)?;
+                return Varargs::ok_from([loaded, data]);
+            } else {    // TODO: Verify which error gets returned. Seems to be all of them appended?
+                error_value = loader;
             }
         }
 

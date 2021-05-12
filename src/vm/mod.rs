@@ -1,11 +1,9 @@
 mod fetch;
 // pub(crate) mod fetch;
-pub(crate) mod helper;
 
 use crate::constants::opcodes;
 use std::rc::Rc;
 use self::fetch::*;
-use self::helper::*;
 use std::cmp::Ordering;
 use std::cell::{RefCell};
 use crate::error::{TracedError, LuaError, ByteCodeError, ArgumentError, TraceableError};
@@ -108,7 +106,7 @@ macro_rules! math_binary_op {
             }
             (Some(func), _) | (_, Some(func)) => {
                 let func = func?;
-                let result = do_call_from_lua($closure, *$pc, func, $execstate, &[lhs, rhs])?;
+                let result = func.call($execstate, &[lhs, rhs])?;
                 init_frame_vars!($execstate, $frame, $register_ident, $pc, $proto);
                 set_reg($registers, $a, result.into_first())?;
             }
@@ -131,7 +129,7 @@ macro_rules! math_binary_op {
             }
             (Some(func), _) | (_, Some(func)) => {
                 let func = func?;
-                let result = do_call_from_lua($closure, *$pc, func, $execstate, &[lhs, rhs])?;
+                let result = func.call($execstate, &[lhs, rhs])?;
                 init_frame_vars!($execstate, $frame, $register_ident, $pc, $proto);
                 set_reg($registers, $a, result.into_first())?;
             }
@@ -153,7 +151,7 @@ macro_rules! math_binary_op {
             }
             (Some(func), _) | (_, Some(func)) => {
                 let func = func?;
-                let result = do_call_from_lua($closure, *$pc, func, $execstate, &[lhs, rhs])?;
+                let result = func.call($execstate, &[lhs, rhs])?;
                 init_frame_vars!($execstate, $frame, $register_ident, $pc, $proto);
                 set_reg($registers, $a, result.into_first())?;
             }
@@ -176,7 +174,7 @@ macro_rules! math_binary_op {
             }
             (Some(func), _) | (_, Some(func)) => {
                 let func = func?;
-                let result = do_call_from_lua($closure, *$pc, func, $execstate, &[lhs, rhs])?;
+                let result = func.call($execstate, &[lhs, rhs])?;
                 init_frame_vars!($execstate, $frame, $register_ident, $pc, $proto);
                 set_reg($registers, $a, result.into_first())?;
             }
@@ -192,7 +190,7 @@ macro_rules! math_binary_op {
             }
             Some(func) => {
                 let func = func?;
-                let result = do_call_from_lua($closure, *$pc, func, $execstate, &[lhs, rhs])?;
+                let result = func.call($execstate, &[lhs, rhs])?;
                 init_frame_vars!($execstate, $frame, $register_ident, $pc, $proto);
                 set_reg($registers, $a, result.into_first())?;
             }
@@ -208,7 +206,7 @@ macro_rules! math_binary_op {
             }
             Some(func) => {
                 let func = func?;
-                let result = do_call_from_lua($closure, *$pc, func, $execstate, &[lhs, rhs])?;
+                let result = func.call($execstate, &[lhs, rhs])?;
                 init_frame_vars!($execstate, $frame, $register_ident, $pc, $proto);
                 set_reg($registers, $a, result.into_first())?;
             }
@@ -228,7 +226,7 @@ macro_rules! math_unary_op {
             }
             Some(func) => {
                 let func = func?;
-                let result = do_call_from_lua($closure, *$pc, func, $execstate, &[lhs])?;
+                let result = func.call($execstate, &[lhs])?;
                 init_frame_vars!($execstate, $frame, $register_ident, $pc, $proto);
                 set_reg($registers, $a, result.into_first())?;
             }
@@ -244,7 +242,7 @@ macro_rules! math_unary_op {
             }
             Some(func) => {
                 let func = func?;
-                let result = do_call_from_lua($closure, *$pc, func, $execstate, &[lhs])?;
+                let result = func.call($execstate, &[lhs])?;
                 init_frame_vars!($execstate, $frame, $register_ident, $pc, $proto);
                 set_reg($registers, $a, result.into_first())?;
             }
@@ -431,8 +429,8 @@ fn closure_loop(closure: &mut ClosureImpl, execstate: &mut ExecutionState, param
                     let key = get_const(proto, b)?.clone();
                     let value = get_rk(proto, registers, k, c)?.clone();
 
-                    if let Some(Ok(func)) = table.metatable().as_ref().map(|t| t.raw_get_into("__newindex")) {
-                        do_call_from_lua(closure, current_pc, func, execstate, &[table.clone().into(), value])?;
+                    if let Some(Ok(function)) = table.metatable().as_ref().map(|t| t.raw_get_into("__newindex")) {
+                        function.call(execstate, &[table.clone().into(), value])?;
                     } else {
                         table.set(key, value)?;
                     }
@@ -442,9 +440,9 @@ fn closure_loop(closure: &mut ClosureImpl, execstate: &mut ExecutionState, param
                     let key = get_reg(registers, b)?.clone();
                     let value = get_rk(proto, registers, k, c)?.clone();
                     let table = LuaTable::coerce_from(get_reg_mut(registers, a)?)?;
-                    if let Some(Ok(func)) = table.metatable().as_ref().map(|t| t.raw_get_into("__newindex")) {
+                    if let Some(Ok(function)) = table.metatable().as_ref().map(|t| t.raw_get_into("__newindex")) {
                         let table = table.clone().into();
-                        do_call_from_lua(closure, current_pc, func, execstate, &[table, key, value])?;
+                        function.call(execstate, &[table, key, value])?;
                     } else {
                         table.set(key, value)?;
                     }
@@ -455,8 +453,8 @@ fn closure_loop(closure: &mut ClosureImpl, execstate: &mut ExecutionState, param
                     let key = LuaValue::from(b as LUA_INT);
                     let value = get_rk(proto, registers, k, c)?.clone();
                     let table = LuaTable::coerce_from(get_reg_mut(registers, a)?)?;
-                    if let Some(Ok(func)) = table.metatable().as_ref().map(|t| t.raw_get_into("__newindex")) {
-                        do_call_from_lua(closure, current_pc, func, execstate, &[table.into(), key, value])?;
+                    if let Some(Ok(function)) = table.metatable().as_ref().map(|t| t.raw_get_into("__newindex")) {
+                        function.call(execstate, &[table.into(), key, value])?;
                     } else {
                         table.set(key, value)?;
                     }
@@ -466,8 +464,8 @@ fn closure_loop(closure: &mut ClosureImpl, execstate: &mut ExecutionState, param
                     let key = get_const(proto, b)?.clone();
                     let value = get_rk(proto, registers, k, c)?.clone();
                     let table = LuaTable::coerce_from(get_reg_mut(registers, a)?)?;
-                    if let Some(Ok(func)) = table.metatable().as_ref().map(|t| t.raw_get_into("__newindex")) {
-                        do_call_from_lua(closure, current_pc, func, execstate, &[table.into(), key, value])?;
+                    if let Some(Ok(function)) = table.metatable().as_ref().map(|t| t.raw_get_into("__newindex")) {
+                        function.call(execstate, &[table.into(), key, value])?;
                     } else {
                         table.set(key, value)?;
                     }
@@ -576,7 +574,7 @@ fn closure_loop(closure: &mut ClosureImpl, execstate: &mut ExecutionState, param
                         rhs.get_metatable(&execstate.metatables).map(|table| table.raw_get_into("__eq"))
                     ) {
                         (Some(Ok(lhs_metamethod)), Some(Ok(rhs_metamethod))) if lhs_metamethod == rhs_metamethod && lhs_metamethod != LuaValue::NIL => {   // If both have the same metamethod, call that
-                            let result = do_call_from_lua(closure, current_pc, lhs_metamethod, execstate, &[lhs, rhs])?;
+                            let result = lhs_metamethod.call(execstate, &[lhs, rhs])?;
                             init_frame_vars!(execstate, frame, registers, pc, proto);
                             if *result.first() != (a != 0) {
                                 *pc = *pc + 1
@@ -601,7 +599,7 @@ fn closure_loop(closure: &mut ClosureImpl, execstate: &mut ExecutionState, param
                         rhs.get_metatable(&execstate.metatables).map(|table| table.raw_get_into("__lt"))
                     ) {
                         (Some(Ok(lhs_metamethod)), Some(Ok(rhs_metamethod))) if lhs_metamethod == rhs_metamethod => {
-                            let result = do_call_from_lua(closure, current_pc, lhs_metamethod, execstate, &[lhs, rhs])?;
+                            let result = lhs_metamethod.call(execstate, &[lhs, rhs])?;
                             init_frame_vars!(execstate, frame, registers, pc, proto);
                             if *result.first() != (k != 0) {
                                 *pc = *pc + 1
@@ -626,7 +624,7 @@ fn closure_loop(closure: &mut ClosureImpl, execstate: &mut ExecutionState, param
                         rhs.get_metatable(&execstate.metatables).map(|table| table.raw_get_into("__le"))
                     ) {
                         (Some(Ok(lhs_metamethod)), Some(Ok(rhs_metamethod))) if lhs_metamethod == rhs_metamethod => {
-                            let result = do_call_from_lua(closure, current_pc, lhs_metamethod, execstate, &[lhs, rhs])?;
+                            let result = lhs_metamethod.call(execstate, &[lhs, rhs])?;
                             init_frame_vars!(execstate, frame, registers, pc, proto);
                             if *result.first() != (k != 0) {
                                 *pc = *pc + 1
@@ -651,7 +649,7 @@ fn closure_loop(closure: &mut ClosureImpl, execstate: &mut ExecutionState, param
                         rhs.get_metatable(&execstate.metatables).map(|table| table.raw_get_into("__eq"))
                     ) {
                         (Some(Ok(lhs_metamethod)), Some(Ok(rhs_metamethod))) if lhs_metamethod == rhs_metamethod && lhs_metamethod != LuaValue::NIL => {   // If both have the same metamethod, call that
-                            let result = do_call_from_lua(closure, current_pc, lhs_metamethod, execstate, &[lhs, rhs])?;
+                            let result = lhs_metamethod.call(execstate, &[lhs, rhs])?;
                             init_frame_vars!(execstate, frame, registers, pc, proto);
                             if *result.first() != (a != 0) {
                                 *pc = *pc + 1
@@ -672,8 +670,8 @@ fn closure_loop(closure: &mut ClosureImpl, execstate: &mut ExecutionState, param
                     let lhs = get_reg(registers, a)?.clone();
                     let rhs = LuaValue::from(sb as LUA_INT);
                     match lhs.get_metatable(&execstate.metatables).map(|table| table.raw_get_into("__eq")) {
-                        Some(Ok(lhs_metamethod)) if lhs_metamethod != LuaValue::NIL => {   // If metamethod, call that
-                            let result = do_call_from_lua(closure, current_pc, lhs_metamethod, execstate, &[lhs, rhs])?;
+                        Some(Ok(metamethod)) if metamethod != LuaValue::NIL => {   // If metamethod, call that
+                            let result = metamethod.call(execstate, &[lhs, rhs])?;
                             init_frame_vars!(execstate, frame, registers, pc, proto);
                             if *result.first() != (a != 0) {
                                 *pc = *pc + 1
@@ -692,8 +690,8 @@ fn closure_loop(closure: &mut ClosureImpl, execstate: &mut ExecutionState, param
                     let lhs = get_reg(registers, a)?.clone();
                     let rhs = LuaValue::from(sb as LUA_INT);
                     match lhs.get_metatable(&execstate.metatables).map(|table| table.raw_get_into("__lt")) {
-                        Some(Ok(lhs_metamethod)) if lhs_metamethod != LuaValue::NIL => {
-                            let result = do_call_from_lua(closure, current_pc, lhs_metamethod, execstate, &[lhs, rhs])?;
+                        Some(Ok(metamethod)) if metamethod != LuaValue::NIL => {
+                            let result = metamethod.call(execstate, &[lhs, rhs])?;
                             init_frame_vars!(execstate, frame, registers, pc, proto);
                             if *result.first() != (k != 0) {
                                 *pc = *pc + 1
@@ -712,8 +710,8 @@ fn closure_loop(closure: &mut ClosureImpl, execstate: &mut ExecutionState, param
                     let lhs = get_reg(registers, a)?.clone();
                     let rhs = LuaValue::from(sb as LUA_INT);
                     match lhs.get_metatable(&execstate.metatables).map(|table| table.raw_get_into("__le")) {
-                        Some(Ok(lhs_metamethod)) if lhs_metamethod != LuaValue::NIL => {
-                            let result = do_call_from_lua(closure, current_pc, lhs_metamethod, execstate, &[lhs, rhs])?;
+                        Some(Ok(metamethod)) if metamethod != LuaValue::NIL => {
+                            let result = metamethod.call(execstate, &[lhs, rhs])?;
                             init_frame_vars!(execstate, frame, registers, pc, proto);
                             if *result.first() != (k != 0) {
                                 *pc = *pc + 1
@@ -732,8 +730,8 @@ fn closure_loop(closure: &mut ClosureImpl, execstate: &mut ExecutionState, param
                     let lhs = get_reg(registers, a)?.clone();
                     let rhs = LuaValue::from(sb as LUA_INT);
                     match lhs.get_metatable(&execstate.metatables).map(|table| table.raw_get_into("__le")) {
-                        Some(Ok(lhs_metamethod)) if lhs_metamethod != LuaValue::NIL => {
-                            let result = do_call_from_lua(closure, current_pc, lhs_metamethod, execstate, &[lhs, rhs])?;
+                        Some(Ok(metamethod)) if metamethod != LuaValue::NIL => {
+                            let result = metamethod.call(execstate, &[lhs, rhs])?;
                             init_frame_vars!(execstate, frame, registers, pc, proto);
                             if *result.first() == (k != 0) {    // invert result of metatable
                                 *pc = *pc + 1
@@ -752,8 +750,8 @@ fn closure_loop(closure: &mut ClosureImpl, execstate: &mut ExecutionState, param
                     let lhs = get_reg(registers, a)?.clone();
                     let rhs = LuaValue::from(sb as LUA_INT);
                     match lhs.get_metatable(&execstate.metatables).map(|table| table.raw_get_into("__lt")) {
-                        Some(Ok(lhs_metamethod)) if lhs_metamethod != LuaValue::NIL => {
-                            let result = do_call_from_lua(closure, current_pc, lhs_metamethod, execstate, &[lhs, rhs])?;
+                        Some(Ok(metamethod)) if metamethod != LuaValue::NIL => {
+                            let result = metamethod.call(execstate, &[lhs, rhs])?;
                             init_frame_vars!(execstate, frame, registers, pc, proto);
                             if *result.first() == (k != 0) {    // invert result of metatable
                                 *pc = *pc + 1
@@ -801,7 +799,7 @@ fn closure_loop(closure: &mut ClosureImpl, execstate: &mut ExecutionState, param
                     for i in param_range {
                         params.push(get_reg(registers, i)?.clone());
                     }
-                    let result = do_call_from_lua(closure, current_pc, function, execstate, &params[..])?;
+                    let result = function.call(execstate, &params[..])?;
                     init_frame_vars!(execstate, frame, registers, pc, proto);
 
                     let result_count = if c == 0 {
@@ -841,7 +839,7 @@ fn closure_loop(closure: &mut ClosureImpl, execstate: &mut ExecutionState, param
                     return if let LuaFunction::LUA_CLOSURE(new_closure) = function {
                         CallResult::TailCall { closure: new_closure.clone(), parameters: param_vec }
                     } else {
-                        match do_call_from_lua(closure, current_pc, function_value.clone(), execstate, &param_vec[..]) {
+                        match function_value.clone().call(execstate, &param_vec[..]) {
                             Ok(result) => CallResult::Ok(result),
                             Err(err) => CallResult::Err(err.trace_tail_call())
                         }
@@ -957,9 +955,8 @@ fn closure_loop(closure: &mut ClosureImpl, execstate: &mut ExecutionState, param
                 }
                 opcodes::TFORCALL => {
                     let function = get_reg(registers, a)?.clone();
-
-                    let params = [get_reg(registers, a + 1)?.clone(), get_reg(registers, a + 2)?.clone()];
-                    let result = do_call_from_lua(closure, current_pc, function, execstate, &params[..])?;
+                    let params = [get_reg(registers, a + 1)?.clone(), get_reg(registers, a + 2)?.clone()];  // This momentarily borrows execstate
+                    let result = function.call(execstate, &params)?;
                     init_frame_vars!(execstate, frame, registers, pc, proto);
                     for i in a + 4..=a + 3 + c {
                         set_reg(registers, i, result.n(i - (a + 4)).clone())?;
